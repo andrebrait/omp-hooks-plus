@@ -9,15 +9,26 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       id-token: write
     steps:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Use current npm
+        run: npm install --global npm@latest
+
       - name: Install dependencies
         run: bun install
+
+      - name: Test
+        run: bun test
 
       - name: Type check
         run: bun run typecheck
@@ -25,8 +36,5 @@ jobs:
       - name: Build check
         run: bun run build
 
-      - name: Configure npm auth
-        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
-
       - name: Publish to npm
-        run: npm publish --access public --provenance
+        run: npm publish --access public

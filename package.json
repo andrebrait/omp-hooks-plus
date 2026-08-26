@@ -4,6 +4,7 @@
   "description": "Install-once Claude Code hook compatibility for OMP",
   "type": "module",
   "keywords": [
+    "pi-package",
     "omp",
     "oh-my-pi",
     "omp-package",
