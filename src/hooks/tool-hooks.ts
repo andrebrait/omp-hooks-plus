@@ -34,8 +34,8 @@ export async function triggerPreToolUseHooks(
 
   const result: PreToolUseResult = { blocked: false };
   const denyReasons: string[] = [];
+  const askReasons: string[] = [];
   let deny = false;
-  let stop = false;
 
   // First pass: stopProcessing wins over everything (even deny)
   for (const exec of results) {
@@ -44,7 +44,6 @@ export async function triggerPreToolUseHooks(
       continue;
     }
     if (exec.commonOutput?.stopProcessing) {
-      stop = true;
       result.stopProcessing = true;
       result.stopReason = exec.commonOutput.stopReason;
       notify?.(`PreToolUse 停止处理: ${result.stopReason ?? ""}`, "warning");
@@ -80,6 +79,13 @@ export async function triggerPreToolUseHooks(
             "Blocked by hook",
         );
         continue;
+      }
+      if (decision === "ask") {
+        askReasons.push(
+          (hookSpecific?.permissionDecisionReason ??
+            jsonOutput.permissionDecisionReason) as string | undefined ??
+            "Hook requested permission",
+        );
       }
 
       if (
@@ -119,6 +125,8 @@ export async function triggerPreToolUseHooks(
     result.blocked = true;
     result.reason = denyReasons[0];
     notify?.(`PreToolUse 拒绝: ${result.reason}`, "warning");
+  } else if (askReasons.length > 0) {
+    result.confirmationReason = askReasons.join("\n");
   }
 
   return result;
@@ -232,6 +240,11 @@ export async function triggerPostToolUseFailureHooks(
   return result;
 }
 
+function replacementContent(value: unknown) {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return [{ type: "text" as const, text: text ?? String(value) }];
+}
+
 export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   pi.on("tool_call", async (event, ctx) => {
     const result = await triggerPreToolUseHooks(
@@ -247,7 +260,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
@@ -264,6 +277,23 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
     if (result.blocked) {
       return { block: true, reason: result.reason };
     }
+    if (result.confirmationReason) {
+      if (!ctx.hasUI) {
+        return {
+          block: true,
+          reason: `Blocked (no UI): ${result.confirmationReason}`,
+        };
+      }
+      const approved = await ctx.ui.confirm(
+        "Claude hook permission",
+        result.confirmationReason,
+        { timeout: 30_000 },
+      );
+      if (!approved) {
+        return { block: true, reason: result.confirmationReason };
+      }
+    }
+
 
     if (result.additionalContext) {
       shared.injectHiddenContext(result.additionalContext, {
@@ -274,7 +304,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
     }
   });
 
-  pi.on("tool_result", async (event, ctx): Promise<any> => {
+  pi.on("tool_result", async (event, ctx) => {
     if (event.isError) {
       const result = await triggerPostToolUseFailureHooks(
         event.toolName,
@@ -291,7 +321,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
           asyncContextSink: (content, details, triggerTurn) =>
             shared.injectHiddenContext(content, details, triggerTurn),
         },
-        shared.currentSettings,
+        shared.settingsFor(ctx),
         (msg, type) => shared.notify(ctx, msg, type),
       );
 
@@ -313,10 +343,13 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         result.isError !== undefined
       ) {
         return {
-          content: result.content ?? event.content,
+          content:
+            result.content === undefined
+              ? event.content
+              : replacementContent(result.content),
           details: result.details ?? event.details,
           isError: result.isError ?? event.isError,
-        } as any;
+        };
       }
 
       return;
@@ -336,7 +369,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
@@ -358,10 +391,13 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       result.isError !== undefined
     ) {
       return {
-        content: result.content ?? event.content,
+        content:
+          result.content === undefined
+            ? event.content
+            : replacementContent(result.content),
         details: result.details ?? event.details,
         isError: result.isError ?? event.isError,
-      } as any;
+      };
     }
   });
 }

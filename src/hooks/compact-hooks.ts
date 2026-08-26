@@ -32,7 +32,7 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
@@ -58,7 +58,7 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 

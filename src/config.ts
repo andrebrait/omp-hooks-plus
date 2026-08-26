@@ -1,15 +1,39 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { HookEventName, HookGroup, HooksConfig, SettingsFile } from "./types";
+import type {
+  Hook,
+  HookEventName,
+  HookGroup,
+  HooksConfig,
+  SettingsFile,
+} from "./types";
+import { isRecord } from "./type-guards";
 
-// ============================================================================
-// 配置读取
-// ============================================================================
+export type SettingsScope = "user" | "project" | "local" | "agents";
 
-export const GLOBAL_SETTINGS_PATH =
-  process.env.OMP_HOOKS_SETTINGS ??
-  path.join(os.homedir(), ".omp", "agent", "settings.json");
+export type SettingsSource = {
+  path: string;
+  scope: SettingsScope;
+};
+
+export type LoadedSettings = {
+  settings: SettingsFile | undefined;
+  sources: SettingsSource[];
+  sourcePaths: string[];
+  projectRoot: string;
+  mode: "claude-native" | "cross-vendor" | "user-only";
+  projectTrusted: boolean;
+  warnings: string[];
+  unsupported: string[];
+};
+
+export type LoadSettingsOptions = {
+  home?: string;
+  claudeConfigDir?: string;
+  projectTrusted?: boolean;
+};
+
 
 const HOOK_KEYS: Array<keyof HooksConfig> = [
   "SessionStart",
@@ -57,35 +81,111 @@ export function toClaudeToolName(toolName: string): string {
   return CLAUDE_TOOL_NAMES[key] ?? toolName;
 }
 
-export function readSettingsFile(settingsPath: string): SettingsFile | undefined {
-  if (!existsSync(settingsPath)) {
+
+function parseHook(value: unknown): Hook | undefined {
+  if (
+    !isRecord(value) ||
+    value.type !== "command" ||
+    typeof value.command !== "string" ||
+    value.command.trim() === ""
+  ) {
+    return undefined;
+  }
+  if (
+    value.args !== undefined &&
+    (!Array.isArray(value.args) ||
+      !value.args.every((argument) => typeof argument === "string"))
+  ) {
+    return undefined;
+  }
+  if (
+    value.shell !== undefined &&
+    value.shell !== "bash" &&
+    value.shell !== "powershell"
+  ) {
     return undefined;
   }
 
-  try {
-    const raw = readFileSync(settingsPath, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") {
-      return undefined;
+  return {
+    type: "command",
+    command: value.command,
+    ...(value.args !== undefined ? { args: value.args } : {}),
+    ...(typeof value.if === "string" ? { if: value.if } : {}),
+    ...(typeof value.timeout === "number" &&
+    Number.isFinite(value.timeout) &&
+    value.timeout > 0
+      ? { timeout: value.timeout }
+      : {}),
+    ...(value.shell !== undefined ? { shell: value.shell } : {}),
+    ...(typeof value.async === "boolean" ? { async: value.async } : {}),
+    ...(typeof value.asyncRewake === "boolean"
+      ? { asyncRewake: value.asyncRewake }
+      : {}),
+  };
+}
+
+function parseHookGroup(value: unknown): HookGroup | undefined {
+  if (!isRecord(value)) return undefined;
+  const hooks = Array.isArray(value.hooks)
+    ? value.hooks
+        .map(parseHook)
+        .filter((hook): hook is Hook => hook !== undefined)
+    : [];
+  if (hooks.length === 0) return undefined;
+  return {
+    ...(typeof value.matcher === "string" ? { matcher: value.matcher } : {}),
+    hooks,
+  };
+}
+
+function parseSettings(value: unknown): SettingsFile | undefined {
+  if (!isRecord(value)) return undefined;
+  if (
+    value.disableAllHooks !== undefined &&
+    typeof value.disableAllHooks !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (value.hooks !== undefined && !isRecord(value.hooks)) return undefined;
+
+  const hooks: HooksConfig = {};
+  if (isRecord(value.hooks)) {
+    for (const key of HOOK_KEYS) {
+      const rawGroups = value.hooks[key];
+      if (!Array.isArray(rawGroups)) continue;
+      const groups = rawGroups
+        .map(parseHookGroup)
+        .filter((group): group is HookGroup => group !== undefined);
+      if (groups.length > 0) hooks[key] = groups;
     }
-    return parsed as SettingsFile;
+  }
+
+  return {
+    ...(Object.keys(hooks).length > 0 ? { hooks } : {}),
+    ...(typeof value.disableAllHooks === "boolean"
+      ? { disableAllHooks: value.disableAllHooks }
+      : {}),
+  };
+}
+
+export function readSettingsFile(settingsPath: string): SettingsFile | undefined {
+  if (!existsSync(settingsPath)) return undefined;
+
+  try {
+    return parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
   } catch {
     return undefined;
   }
 }
 
 function mergeHooks(
-  globalHooks: HooksConfig | undefined,
-  projectHooks: HooksConfig | undefined,
+  ...hookSets: Array<HooksConfig | undefined>
 ): HooksConfig | undefined {
   const merged: HooksConfig = {};
   let hasAnyHook = false;
 
   for (const key of HOOK_KEYS) {
-    const groups = [
-      ...(globalHooks?.[key] ?? []),
-      ...(projectHooks?.[key] ?? []),
-    ];
+    const groups = hookSets.flatMap((hooks) => hooks?.[key] ?? []);
 
     if (groups.length > 0) {
       merged[key] = groups;
@@ -96,27 +196,85 @@ function mergeHooks(
   return hasAnyHook ? merged : undefined;
 }
 
-export function loadSettings(cwd: string): {
-  settings: SettingsFile | undefined;
-  sourcePaths: string[];
-} {
-  const projectSettingsPath = path.join(cwd, ".omp", "settings.json");
-  const globalSettings = readSettingsFile(GLOBAL_SETTINGS_PATH);
-  const projectSettings = readSettingsFile(projectSettingsPath);
+export function findProjectRoot(cwd: string): string {
+  let current = path.resolve(cwd);
 
-  const sourcePaths = [GLOBAL_SETTINGS_PATH, projectSettingsPath].filter((p) =>
-    existsSync(p),
-  );
+  while (true) {
+    if (
+      existsSync(path.join(current, ".git")) ||
+      existsSync(path.join(current, ".agents", "hooks.json")) ||
+      existsSync(path.join(current, ".claude", "settings.json")) ||
+      existsSync(path.join(current, ".claude", "settings.local.json"))
+    ) {
+      return current;
+    }
 
-  const hooks = mergeHooks(globalSettings?.hooks, projectSettings?.hooks);
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(cwd);
+    current = parent;
+  }
+}
 
-  if (!hooks) {
-    return { settings: undefined, sourcePaths };
+export function loadSettings(
+  cwd: string,
+  options: LoadSettingsOptions = {},
+): LoadedSettings {
+  const home = options.home ?? os.homedir();
+  const projectRoot = findProjectRoot(cwd);
+  const projectTrusted = options.projectTrusted ?? false;
+  const userClaudeDir =
+    options.claudeConfigDir ??
+    process.env.CLAUDE_CONFIG_DIR ??
+    path.join(home, ".claude");
+  const userPath = path.join(userClaudeDir, "settings.json");
+  const agentsPath = path.join(projectRoot, ".agents", "hooks.json");
+  const projectPath = path.join(projectRoot, ".claude", "settings.json");
+  const localPath = path.join(projectRoot, ".claude", "settings.local.json");
+
+  const sources: SettingsSource[] = [];
+  const settingsFiles: SettingsFile[] = [];
+  const warnings: string[] = [];
+  const addSource = (settingsPath: string, scope: SettingsScope): void => {
+    if (!existsSync(settingsPath)) return;
+    sources.push({ path: settingsPath, scope });
+    const settings = readSettingsFile(settingsPath);
+    if (settings) {
+      settingsFiles.push(settings);
+    } else {
+      warnings.push(`Failed to parse hooks settings: ${settingsPath}`);
+    }
+  };
+
+  addSource(userPath, "user");
+
+  let mode: LoadedSettings["mode"] = "user-only";
+  if (projectTrusted && existsSync(agentsPath)) {
+    mode = "cross-vendor";
+    addSource(agentsPath, "agents");
+  } else if (projectTrusted) {
+    mode = "claude-native";
+    addSource(projectPath, "project");
+    addSource(localPath, "local");
   }
 
+  const disabled = settingsFiles.some((settings) => settings.disableAllHooks === true);
+  const hooks = disabled
+    ? undefined
+    : mergeHooks(...settingsFiles.map((settings) => settings.hooks));
+  const settings = hooks ? { hooks } : undefined;
+
   return {
-    settings: { hooks },
-    sourcePaths,
+    settings,
+    sources,
+    sourcePaths: sources.map((source) => source.path),
+    projectRoot,
+    mode,
+    projectTrusted,
+    unsupported: [
+      "Claude managed-policy hooks are not loaded",
+      "Claude plugin hooks are not loaded",
+    ],
+    warnings,
   };
 }
 

@@ -9,9 +9,9 @@ import type {
 } from "../types";
 import {
   appendAdditionalContext,
-  executeParsedHook,
+  collectMatchingHooks,
   getStringField,
-  hookIfMatches,
+  runHooksParallel,
 } from "./shared";
 
 export async function triggerUserPromptSubmitHooks(
@@ -21,59 +21,70 @@ export async function triggerUserPromptSubmitHooks(
 ): Promise<UserPromptSubmitResult> {
   const groups = getHookGroups(settings, "UserPromptSubmit");
   const result: UserPromptSubmitResult = { blocked: false };
+  const collected = collectMatchingHooks(
+    groups,
+    context,
+    "",
+    [],
+    () => undefined,
+  );
+  const results = await runHooksParallel(
+    collected,
+    context,
+    "UserPromptSubmit",
+  );
 
-  for (const group of groups) {
-    for (const hook of group.hooks ?? []) {
-      if (hook.if && !hookIfMatches(context, hook.if)) continue;
+  for (const {
+    hookResult,
+    plainStdout,
+    jsonOutput,
+    commonOutput,
+    error,
+  } of results) {
+    if (error) {
+      notify?.(`UserPromptSubmit 执行错误: ${String(error)}`, "error");
+      continue;
+    }
 
-      try {
-        const { hookResult, plainStdout, jsonOutput, commonOutput } =
-          await executeParsedHook(hook, context, "UserPromptSubmit");
+    if (hookResult.exitCode === 0 && jsonOutput) {
+      const additionalContext = getStringField(
+        commonOutput?.hookSpecificOutput?.additionalContext,
+        jsonOutput.additionalContext,
+      );
 
-        if (hookResult.exitCode === 0 && jsonOutput) {
-          const additionalContext = getStringField(
-            commonOutput?.hookSpecificOutput?.additionalContext,
-            jsonOutput.additionalContext,
-          );
+      result.additionalContext = appendAdditionalContext(
+        result.additionalContext,
+        additionalContext,
+      );
 
-          result.additionalContext = appendAdditionalContext(
-            result.additionalContext,
-            additionalContext,
-          );
-
-          if (commonOutput?.systemMessage) {
-            notify?.(commonOutput.systemMessage, "warning");
-          }
-
-          if (
-            jsonOutput.decision !== undefined &&
-            jsonOutput.decision !== "block"
-          ) {
-            notify?.(
-              `UserPromptSubmit 忽略无效 decision: ${String(jsonOutput.decision)}`,
-              "warning",
-            );
-          }
-
-          if (jsonOutput.decision === "block") {
-            result.blocked = true;
-            result.reason =
-              getStringField(jsonOutput.reason) ?? "Blocked by hook";
-            return result;
-          }
-        } else if (hookResult.exitCode === 0 && plainStdout) {
-          notify?.(`UserPromptSubmit 输出 (非JSON): ${plainStdout}`, "info");
-        }
-
-        if (hookResult.exitCode !== 0) {
-          notify?.(
-            `UserPromptSubmit 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
-            "error",
-          );
-        }
-      } catch (err) {
-        notify?.(`UserPromptSubmit 执行错误: ${String(err)}`, "error");
+      if (commonOutput?.systemMessage) {
+        notify?.(commonOutput.systemMessage, "warning");
       }
+
+      if (
+        jsonOutput.decision !== undefined &&
+        jsonOutput.decision !== "block"
+      ) {
+        notify?.(
+          `UserPromptSubmit 忽略无效 decision: ${String(jsonOutput.decision)}`,
+          "warning",
+        );
+      }
+
+      if (jsonOutput.decision === "block") {
+        result.blocked = true;
+        result.reason =
+          getStringField(jsonOutput.reason) ?? "Blocked by hook";
+      }
+    } else if (hookResult.exitCode === 0 && plainStdout) {
+      notify?.(`UserPromptSubmit 输出 (非JSON): ${plainStdout}`, "info");
+    }
+
+    if (hookResult.exitCode !== 0) {
+      notify?.(
+        `UserPromptSubmit 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
+        "error",
+      );
     }
   }
 
@@ -98,7 +109,7 @@ export function registerPromptHooks(
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
@@ -126,7 +137,7 @@ export function registerPromptHooks(
 
     return {
       message: {
-        customType: "omp-hooks",
+        customType: "omp-hooks-plus",
         content: additionalContext,
         display: false,
         details: {

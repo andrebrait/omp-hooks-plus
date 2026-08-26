@@ -31,13 +31,11 @@ export function registerSessionHooks(
   // SessionEnd mapping:
   // other -> session_shutdown
   pi.on("session_start", async (_event, ctx) => {
-    shared.initSettings(ctx.cwd);
     await shared.triggerSessionStartHook("startup", ctx);
   });
 
   pi.on("session_before_switch", async (event, ctx) => {
     if (event.reason === "resume") {
-      shared.initSettings(ctx.cwd);
       await shared.triggerSessionStartHook("resume", ctx);
     }
   });
@@ -57,7 +55,7 @@ export function registerSessionHooks(
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 

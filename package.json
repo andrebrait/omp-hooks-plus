@@ -1,7 +1,7 @@
 {
-  "name": "omp-hooks",
-  "version": "0.0.5",
-  "description": "Claude Code-compatible command hooks for the OMP (Oh My Pi) coding agent",
+  "name": "omp-hooks-plus",
+  "version": "0.1.0",
+  "description": "Install-once Claude Code hook compatibility for OMP",
   "type": "module",
   "keywords": [
     "omp",
@@ -14,15 +14,15 @@
     "claude-code-hooks"
   ],
   "license": "MIT",
-  "author": "ZeR020",
+  "author": "Andre Brait",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ZeR020/omp-hooks.git"
+    "url": "git+https://github.com/andrebrait/omp-hooks-plus.git"
   },
   "bugs": {
-    "url": "https://github.com/ZeR020/omp-hooks/issues"
+    "url": "https://github.com/andrebrait/omp-hooks-plus/issues"
   },
-  "homepage": "https://github.com/ZeR020/omp-hooks#readme",
+  "homepage": "https://github.com/andrebrait/omp-hooks-plus#readme",
   "publishConfig": {
     "access": "public"
   },
@@ -33,8 +33,9 @@
   ],
   "scripts": {
     "build": "bun build src/omp-hooks.ts --target=bun --outdir=dist",
+    "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run typecheck && bun run build"
+    "prepublishOnly": "bun run test && bun run typecheck && bun run build"
   },
   "omp": {
     "extensions": [
@@ -47,9 +48,10 @@
     ]
   },
   "peerDependencies": {
-    "@oh-my-pi/pi-coding-agent": "*"
+    "@oh-my-pi/pi-coding-agent": ">=18.0.5"
   },
   "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "^18.0.5",
     "typescript": "^6.0.2"
   }
 }

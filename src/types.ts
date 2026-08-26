@@ -48,6 +48,7 @@ export type HooksConfig = {
 
 export type SettingsFile = {
   hooks?: HooksConfig;
+  disableAllHooks?: boolean;
 };
 
 export type HookEventName =
@@ -129,6 +130,7 @@ export type PreToolUseResult = {
   reason?: string;
   updatedInput?: Record<string, unknown>;
   additionalContext?: string;
+  confirmationReason?: string;
   stopProcessing?: boolean;
   stopReason?: string;
 };

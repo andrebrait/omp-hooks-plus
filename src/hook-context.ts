@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { loadSettings } from "./config";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { loadSettings, type LoadedSettings } from "./config";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import type { HookMatcherValue, SettingsFile } from "./types";
@@ -18,17 +18,18 @@ const _injectBuffer: { content: string[]; details: Record<string, unknown>; time
 export type HookModuleContext = {
   pi: ExtensionAPI;
   currentSettings: SettingsFile | undefined;
+  currentLoad: LoadedSettings | undefined;
   firedSessionStartKeys: Set<string>;
   pendingUserPromptContext?: string;
   stopHookActive: boolean;
-  getSessionId: (ctx: any) => string;
-  notify: (ctx: any, msg: string, type: NotifyType) => void;
+  getSessionId: (ctx: ExtensionContext) => string;
+  notify: (ctx: ExtensionContext, msg: string, type: NotifyType) => void;
   injectHiddenContext: (
     content: string,
     details: Record<string, unknown>,
     triggerTurn?: boolean,
   ) => void;
-  initSettings: (cwd: string) => SettingsFile | undefined;
+  settingsFor: (ctx: ExtensionContext) => SettingsFile | undefined;
   buildToolResponse: (event: {
     content: unknown;
     details?: unknown;
@@ -36,7 +37,7 @@ export type HookModuleContext = {
   }) => Record<string, unknown>;
   triggerSessionStartHook: (
     matcher: HookMatcherValue<"SessionStart">,
-    ctx: any,
+    ctx: ExtensionContext,
   ) => Promise<void>;
 };
 
@@ -44,12 +45,13 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
   const shared: HookModuleContext = {
     pi,
     currentSettings: undefined,
+    currentLoad: undefined,
     firedSessionStartKeys: new Set<string>(),
     pendingUserPromptContext: undefined,
     stopHookActive: false,
-    getSessionId: (ctx: any) =>
+    getSessionId: (ctx: ExtensionContext) =>
       ctx.sessionManager.getSessionFile() ?? "ephemeral",
-    notify: (ctx: any, msg: string, type: NotifyType) =>
+    notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
     injectHiddenContext: (content, details, triggerTurn = false) => {
       // 50ms debounce — parallel grep/glob calls trigger concurrent sendMessage
@@ -65,7 +67,7 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
         const combined = _injectBuffer.content.join("\n\n");
         shared.pi.sendMessage(
           {
-            customType: "omp-hooks",
+            customType: "omp-hooks-plus",
             content: combined,
             display: false,
             details: _injectBuffer.details,
@@ -77,10 +79,12 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
         _injectBuffer.timer = undefined;
       }, 50);
     },
-    initSettings: (cwd: string) => {
-      const { settings } = loadSettings(cwd);
-      shared.currentSettings = settings;
-      return settings;
+    settingsFor: (ctx: ExtensionContext) => {
+      const projectTrusted = ctx.isProjectTrusted();
+      const loaded = loadSettings(ctx.cwd, { projectTrusted });
+      shared.currentLoad = loaded;
+      shared.currentSettings = loaded.settings;
+      return loaded.settings;
     },
     buildToolResponse: (event) => {
       const toolResponse: Record<string, unknown> = {
@@ -100,6 +104,7 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
       return toolResponse;
     },
     triggerSessionStartHook: async (matcher, ctx) => {
+      shared.settingsFor(ctx);
       const sessionId = shared.getSessionId(ctx);
       const dedupeKey = `${matcher}:${sessionId}`;
       if (shared.firedSessionStartKeys.has(dedupeKey)) {

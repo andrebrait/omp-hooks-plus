@@ -179,18 +179,41 @@ function executeCommandHook(
     exitCode: number;
   }>();
   const invocation = getCommandInvocation(hook);
+  const useProcessGroup =
+    process.platform === "darwin" || process.platform === "linux";
   const child = spawn(invocation.command, invocation.args, {
     cwd,
+    detached: useProcessGroup,
     stdio: ["pipe", "pipe", "pipe"],
   });
 
   let stdout = "";
   let stderr = "";
   let settled = false;
+  let timeout: NodeJS.Timeout | undefined;
+  let escalation: NodeJS.Timeout | undefined;
 
-  const finish = (result: { stdout: string; stderr: string; exitCode: number }) => {
+  const signal = (name: NodeJS.Signals): void => {
+    if (useProcessGroup && child.pid) {
+      try {
+        process.kill(-child.pid, name);
+        return;
+      } catch {
+        // The process may have exited between the timeout and signal.
+      }
+    }
+    child.kill(name);
+  };
+
+  const finish = (result: {
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  }): void => {
     if (settled) return;
     settled = true;
+    clearTimeout(timeout);
+    clearTimeout(escalation);
     resolve(result);
   };
 
@@ -202,20 +225,29 @@ function executeCommandHook(
     stderr += data.toString();
   });
 
+  child.stdin.on("error", (error) => {
+    finish({
+      stdout,
+      stderr: `${stderr}\n${error.message}`.trim(),
+      exitCode: 1,
+    });
+  });
   child.stdin.write(inputJson);
   child.stdin.end();
 
-  const timeout = setTimeout(() => {
-    child.kill();
+  timeout = setTimeout(() => {
+    signal("SIGTERM");
+    escalation = setTimeout(() => signal("SIGKILL"), 1_000);
+    escalation.unref();
     finish({
       stdout,
-      stderr: `${stderr}\n[omp-hooks] Hook timed out`.trim(),
+      stderr: `${stderr}\n[omp-hooks-plus] Hook timed out`.trim(),
       exitCode: 1,
     });
   }, timeoutMs);
+  timeout.unref();
 
   child.on("close", (code) => {
-    clearTimeout(timeout);
     finish({
       stdout,
       stderr,
@@ -223,11 +255,10 @@ function executeCommandHook(
     });
   });
 
-  child.on("error", (err) => {
-    clearTimeout(timeout);
+  child.on("error", (error) => {
     finish({
       stdout,
-      stderr: err.message,
+      stderr: `${stderr}\n${error.message}`.trim(),
       exitCode: 1,
     });
   });

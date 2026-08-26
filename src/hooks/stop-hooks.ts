@@ -111,11 +111,21 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.currentSettings,
+      shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
     if (result.blocked) {
+      if (shared.stopHookActive) {
+        shared.notify(
+          ctx,
+          `Stop hook blocked again; loop guard suppressed another turn: ${result.reason ?? "no reason"}`,
+          "warning",
+        );
+        shared.stopHookActive = false;
+        return;
+      }
+
       const continuationMessage = [result.reason, result.additionalContext]
         .filter((value): value is string => Boolean(value && value.trim()))
         .join("\n\n");
@@ -123,7 +133,7 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       shared.stopHookActive = true;
       shared.pi.sendMessage(
         {
-          customType: "omp-hooks",
+          customType: "omp-hooks-plus",
           content: continuationMessage,
           display: false,
           details: {
