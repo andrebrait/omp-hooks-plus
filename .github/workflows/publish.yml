@@ -36,5 +36,17 @@ jobs:
       - name: Build check
         run: bun run build
 
+      - name: Check release version
+        id: release
+        run: |
+          spec="$(node --print "require('./package.json').name + '@' + require('./package.json').version")"
+          if npm view "$spec" version >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "$spec is already published"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.release.outputs.publish == 'true'
         run: npm publish --access public
