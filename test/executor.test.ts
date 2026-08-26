@@ -32,4 +32,19 @@ describe("hook timeout", () => {
     expect(result.stderr).toContain("[omp-hooks-plus] Hook timed out");
     expect(existsSync(marker)).toBe(false);
   });
+  test("keeps stdout when a fast hook closes stdin early", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "omp-hooks-epipe-"));
+    roots.push(root);
+
+    const result = await executeHook(
+      { type: "command", command: "printf ready" },
+      { payload: "x".repeat(1_000_000) },
+      root,
+      1_000,
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("ready");
+  });
+
 });

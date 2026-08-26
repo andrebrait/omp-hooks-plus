@@ -226,6 +226,7 @@ function executeCommandHook(
   });
 
   child.stdin.on("error", (error) => {
+    if ("code" in error && error.code === "EPIPE") return;
     finish({
       stdout,
       stderr: `${stderr}\n${error.message}`.trim(),
