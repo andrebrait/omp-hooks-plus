@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../config";
+import { resetInjectedContext } from "../hook-context";
 import type { HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
@@ -77,7 +78,15 @@ export async function triggerUserPromptSubmitHooks(
           getStringField(jsonOutput.reason) ?? "Blocked by hook";
       }
     } else if (hookResult.exitCode === 0 && plainStdout) {
-      notify?.(`UserPromptSubmit 输出 (非JSON): ${plainStdout}`, "info");
+      // Claude Code adds plain-text stdout as context for UserPromptSubmit,
+      // UserPromptExpansion and SessionStart (hooks reference, "Exit code 0").
+      // Canonical hooks such as `codegraph prompt-hook` print bare text, so
+      // treating it as context is the compatible behavior — no JSON envelope,
+      // no wrapper command.
+      result.additionalContext = appendAdditionalContext(
+        result.additionalContext,
+        plainStdout,
+      );
     }
 
     if (hookResult.exitCode !== 0) {
@@ -96,6 +105,7 @@ export function registerPromptHooks(
   shared: HookModuleContext,
 ) {
   pi.on("input", async (event, ctx) => {
+    resetInjectedContext();
     shared.pendingUserPromptContext = undefined;
     shared.stopHookActive = false;
 

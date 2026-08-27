@@ -36,4 +36,45 @@ describe("UserPromptSubmit hook execution", () => {
 
     expect(readFileSync(marker, "utf8")).toBe("x");
   });
+
+  test("adds plain-text stdout as context, no JSON envelope needed", async () => {
+    const settings: SettingsFile = {
+      hooks: {
+        UserPromptSubmit: [
+          { hooks: [{ type: "command", command: "printf '%s' 'CODEGRAPH CONTEXT'" }] },
+        ],
+      },
+    };
+    const context: HookExecutionContext = {
+      sessionId: "session",
+      cwd: process.cwd(),
+      hookEventName: "UserPromptSubmit",
+      prompt: "hello",
+    };
+
+    const result = await triggerUserPromptSubmitHooks(context, settings);
+
+    expect(result.additionalContext).toBe("CODEGRAPH CONTEXT");
+    expect(result.blocked).toBe(false);
+  });
+
+  test("ignores stdout from a hook that exited non-zero", async () => {
+    const settings: SettingsFile = {
+      hooks: {
+        UserPromptSubmit: [
+          { hooks: [{ type: "command", command: "printf '%s' 'BROKEN'; exit 1" }] },
+        ],
+      },
+    };
+    const context: HookExecutionContext = {
+      sessionId: "session",
+      cwd: process.cwd(),
+      hookEventName: "UserPromptSubmit",
+      prompt: "hello",
+    };
+
+    const result = await triggerUserPromptSubmitHooks(context, settings);
+
+    expect(result.additionalContext).toBeUndefined();
+  });
 });

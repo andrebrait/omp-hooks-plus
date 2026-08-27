@@ -15,6 +15,27 @@ const _injectBuffer: { content: string[]; details: Record<string, unknown>; time
   timer: undefined,
 };
 
+// Per-turn dedup for injected context. A PreToolUse hook that prints a standing
+// reminder fires once per tool call, so a turn with a dozen grep/read calls used
+// to queue a dozen byte-identical hidden messages. Claude Code attaches its
+// additionalContext to the individual tool call, so a repeat reads as part of
+// that tool's result; OMP delivers standalone messages, where a repeat is pure
+// noise. Keyed on the exact content string, matching Claude's exact-command
+// handler dedup. Cleared on every new user prompt, so each turn is reminded once.
+const _injectedThisTurn = new Set<string>();
+
+/** Claim `content` for this turn. False when it was already injected. */
+export function claimInjectedContext(content: string): boolean {
+  if (_injectedThisTurn.has(content)) return false;
+  _injectedThisTurn.add(content);
+  return true;
+}
+
+/** Re-arm every reminder — called when a new user prompt starts a turn. */
+export function resetInjectedContext(): void {
+  _injectedThisTurn.clear();
+}
+
 export type HookModuleContext = {
   pi: ExtensionAPI;
   currentSettings: SettingsFile | undefined;
@@ -60,6 +81,7 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
       // context queues for the next turn instead of calling agent.steer(),
       // which would interrupt in-flight tools with "Skipped due to pending
       // system advisory" (OMP's stale-guard, agent-loop.ts:2351).
+      if (!claimInjectedContext(content)) return;
       _injectBuffer.content.push(content);
       if (details) Object.assign(_injectBuffer.details, details);
       clearTimeout(_injectBuffer.timer);
