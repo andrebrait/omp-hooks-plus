@@ -1,6 +1,6 @@
 {
   "name": "omp-hooks-plus",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Install-once Claude Code hook compatibility for OMP",
   "type": "module",
   "keywords": [

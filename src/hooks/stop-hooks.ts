@@ -42,7 +42,7 @@ export async function triggerStopHooks(
   const result: StopResult = { blocked: false };
   const blockReasons: string[] = [];
 
-  for (const { hookResult, plainStdout, jsonOutput, commonOutput, error } of results) {
+  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) {
       notify?.(`Stop 执行错误: ${String(error)}`, "error");
       continue;
@@ -78,8 +78,6 @@ export async function triggerStopHooks(
           getStringField(jsonOutput.reason) ?? "Continue requested by Stop hook",
         );
       }
-    } else if (hookResult.exitCode === 0 && plainStdout) {
-      notify?.(`Stop 输出 (非JSON): ${plainStdout}`, "info");
     }
 
     if (hookResult.exitCode !== 0) {
