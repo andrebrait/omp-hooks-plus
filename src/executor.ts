@@ -3,11 +3,11 @@ import { toClaudeToolName } from "./config";
 import type { Hook, HookExecutionContext } from "./types";
 
 // ============================================================================
-// Hook 执行器
+// Hook executor
 // ============================================================================
 
 /**
- * 构建 Claude Code 风格的 JSON 输入
+ * Build Claude Code style JSON input
  */
 export function buildHookInput(ctx: HookExecutionContext): object {
   const base: Record<string, unknown> = {

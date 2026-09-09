@@ -40,13 +40,13 @@ export async function triggerPreToolUseHooks(
   // First pass: stopProcessing wins over everything (even deny)
   for (const exec of results) {
     if (exec.error) {
-      notify?.(`PreToolUse 执行错误: ${String(exec.error)}`, "error");
+      notify?.(`PreToolUse execution error: ${String(exec.error)}`, "error");
       continue;
     }
     if (exec.commonOutput?.stopProcessing) {
       result.stopProcessing = true;
       result.stopReason = exec.commonOutput.stopReason;
-      notify?.(`PreToolUse 停止处理: ${result.stopReason ?? ""}`, "warning");
+      notify?.(`PreToolUse stopped processing: ${result.stopReason ?? ""}`, "warning");
       break;
     }
   }
@@ -113,7 +113,7 @@ export async function triggerPreToolUseHooks(
 
     if (hookResult.exitCode !== 0 && hookResult.exitCode !== 2) {
       notify?.(
-        `PreToolUse 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
+        `PreToolUse failed (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
         "error",
       );
     }
@@ -122,7 +122,7 @@ export async function triggerPreToolUseHooks(
   if (deny) {
     result.blocked = true;
     result.reason = denyReasons[0];
-    notify?.(`PreToolUse 拒绝: ${result.reason}`, "warning");
+    notify?.(`PreToolUse denied: ${result.reason}`, "warning");
   } else if (askReasons.length > 0) {
     result.confirmationReason = askReasons.join("\n");
   }
@@ -144,7 +144,7 @@ function mergePostToolUseResults(
   // First pass: stopProcessing wins
   for (const exec of results) {
     if (exec.error) {
-      notify?.(`PostToolUse 执行错误: ${String(exec.error)}`, "error");
+      notify?.(`PostToolUse execution error: ${String(exec.error)}`, "error");
       continue;
     }
     if (exec.commonOutput?.stopProcessing) {
@@ -159,7 +159,7 @@ function mergePostToolUseResults(
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
-      notify?.(`PostToolUse 反馈: ${hookResult.stderr}`, "warning");
+      notify?.(`PostToolUse feedback: ${hookResult.stderr}`, "warning");
       continue;
     }
 
@@ -191,7 +191,7 @@ function mergePostToolUseResults(
 
     if (hookResult.exitCode !== 0 && hookResult.exitCode !== 2) {
       notify?.(
-        `PostToolUse 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
+        `PostToolUse failed (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
         "error",
       );
     }

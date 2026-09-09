@@ -44,7 +44,7 @@ export async function triggerStopHooks(
 
   for (const { hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) {
-      notify?.(`Stop 执行错误: ${String(error)}`, "error");
+      notify?.(`Stop execution error: ${String(error)}`, "error");
       continue;
     }
 
@@ -68,7 +68,7 @@ export async function triggerStopHooks(
         jsonOutput.decision !== "block"
       ) {
         notify?.(
-          `Stop 忽略无效 decision: ${String(jsonOutput.decision)}`,
+          `Stop ignoring invalid decision: ${String(jsonOutput.decision)}`,
           "warning",
         );
       }
@@ -82,7 +82,7 @@ export async function triggerStopHooks(
 
     if (hookResult.exitCode !== 0) {
       notify?.(
-        `Stop 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
+        `Stop failed (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
         "error",
       );
     }

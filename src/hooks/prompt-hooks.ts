@@ -43,7 +43,7 @@ export async function triggerUserPromptSubmitHooks(
     error,
   } of results) {
     if (error) {
-      notify?.(`UserPromptSubmit 执行错误: ${String(error)}`, "error");
+      notify?.(`UserPromptSubmit execution error: ${String(error)}`, "error");
       continue;
     }
 
@@ -67,7 +67,7 @@ export async function triggerUserPromptSubmitHooks(
         jsonOutput.decision !== "block"
       ) {
         notify?.(
-          `UserPromptSubmit 忽略无效 decision: ${String(jsonOutput.decision)}`,
+          `UserPromptSubmit ignoring invalid decision: ${String(jsonOutput.decision)}`,
           "warning",
         );
       }
@@ -91,7 +91,7 @@ export async function triggerUserPromptSubmitHooks(
 
     if (hookResult.exitCode !== 0) {
       notify?.(
-        `UserPromptSubmit 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
+        `UserPromptSubmit failed (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
         "error",
       );
     }

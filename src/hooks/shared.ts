@@ -415,7 +415,7 @@ export async function triggerSimpleHooks(
 
   for (const { hookResult, plainStdout, jsonOutput, commonOutput, error } of results) {
     if (error) {
-      notify?.(`Hook 执行错误: ${String(error)}`, "error");
+      notify?.(`Hook execution error: ${String(error)}`, "error");
       continue;
     }
 
@@ -448,7 +448,7 @@ export async function triggerSimpleHooks(
 
     if (hookResult.exitCode !== 0) {
       notify?.(
-        `Hook 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
+        `Hook failed (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
         "error",
       );
     }
