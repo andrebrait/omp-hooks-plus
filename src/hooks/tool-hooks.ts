@@ -52,7 +52,7 @@ export async function triggerPreToolUseHooks(
   }
 
   // If not stopped, second pass: collect deny (deny-wins), updatedInput (merge in order), context
-  for (const { hookResult, plainStdout, jsonOutput, commonOutput, error } of results) {
+  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
@@ -109,8 +109,6 @@ export async function triggerPreToolUseHooks(
         result.additionalContext,
         additionalContext,
       );
-    } else if (hookResult.exitCode === 0 && plainStdout) {
-      notify?.(`PreToolUse 输出 (非JSON): ${plainStdout}`, "info");
     }
 
     if (hookResult.exitCode !== 0 && hookResult.exitCode !== 2) {
@@ -157,7 +155,7 @@ function mergePostToolUseResults(
   }
 
   // Second pass: patch + context in order
-  for (const { hookResult, plainStdout, jsonOutput, commonOutput, error } of results) {
+  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
@@ -189,8 +187,6 @@ function mergePostToolUseResults(
       if (result.isError === undefined && patch.isError !== undefined) {
         result.isError = patch.isError;
       }
-    } else if (hookResult.exitCode === 0 && plainStdout) {
-      notify?.(`PostToolUse 输出: ${plainStdout}`, "info");
     }
 
     if (hookResult.exitCode !== 0 && hookResult.exitCode !== 2) {

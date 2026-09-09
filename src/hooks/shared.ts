@@ -151,7 +151,6 @@ export function getStringField(
 export type CommonHookOutput = {
   hookSpecificOutput?: Record<string, unknown>;
   systemMessage?: string;
-  suppressOutput: boolean;
   stopProcessing: boolean;
   stopReason?: string;
 };
@@ -165,7 +164,6 @@ export function extractCommonOutput(
   return {
     hookSpecificOutput,
     systemMessage: getStringField(jsonOutput.systemMessage),
-    suppressOutput: jsonOutput.suppressOutput === true,
     stopProcessing: jsonOutput.continue === false,
     stopReason: getStringField(jsonOutput.stopReason),
   };
@@ -453,13 +451,6 @@ export async function triggerSimpleHooks(
         `Hook 失败 (exit ${hookResult.exitCode}): ${hookResult.stderr}`,
         "error",
       );
-    } else if (
-      plainStdout &&
-      eventName !== "SessionStart" &&
-      !jsonOutput &&
-      commonOutput?.suppressOutput !== true
-    ) {
-      notify?.(`Hook 输出: ${plainStdout}`, "info");
     }
   }
 

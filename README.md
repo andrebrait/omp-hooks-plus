@@ -76,7 +76,7 @@ Matching handlers are deduplicated by command and arguments and normally run in 
 
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts terminate the complete process group on macOS and Linux. Repeated blocking from a `Stop` hook is suppressed after one follow-up turn.
 
-Successful plain-text `Stop` output is ignored: it does not create a notification or enter model context. JSON blocking decisions and `systemMessage` warnings remain supported, and nonzero exits still report errors.
+Successful plain-text output never creates a notification. `SessionStart` and `UserPromptSubmit` add it to model context; `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, and `Stop` ignore it. Structured JSON handling and failed-hook diagnostics are unchanged.
 
 ## Current limits
 
