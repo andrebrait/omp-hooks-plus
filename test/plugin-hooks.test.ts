@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { disableProvider, enableProvider } from "@oh-my-pi/pi-coding-agent/capability";
+import { disableProvider, enableProvider, isProviderEnabled } from "@oh-my-pi/pi-coding-agent/capability";
 import { getHookGroups, loadSettings } from "../src/config";
 import { triggerSessionHooks } from "../src/hooks/session-hooks";
 
@@ -223,19 +223,22 @@ describe("plugin hook trust and source gating", () => {
       hooks: { Stop: [{ hooks: [{ type: "command", command: "echo toggled" }] }] },
     });
     registerUserPlugins(home, { "toggle-fixture@test": plugin });
+    const wasEnabled = isProviderEnabled("claude-plugins");
 
     disableProvider("claude-plugins");
     try {
       const loaded = await loadSettings(repo, { home, projectTrusted: false });
       expect(getHookGroups(loaded.settings, "Stop")).toEqual([]);
     } finally {
-      enableProvider("claude-plugins");
+      if (wasEnabled) enableProvider("claude-plugins");
     }
 
-    const reenabled = await loadSettings(repo, { home, projectTrusted: false });
-    expect(
-      getHookGroups(reenabled.settings, "Stop").flatMap((g) => (g.hooks ?? []).map((h) => h.command)),
-    ).toEqual(["echo toggled"]);
+    if (wasEnabled) {
+      const reenabled = await loadSettings(repo, { home, projectTrusted: false });
+      expect(
+        getHookGroups(reenabled.settings, "Stop").flatMap((g) => (g.hooks ?? []).map((h) => h.command)),
+      ).toEqual(["echo toggled"]);
+    }
   });
 });
 
@@ -334,6 +337,36 @@ describe("plugin hook diagnostics", () => {
 });
 
 describe("plugin hook execution", () => {
+  test("different valid plugin ids cannot share persistent state", async () => {
+    const root = tempRoot();
+    const home = path.join(root, "home");
+    const repo = path.join(root, "repo");
+    const pluginA = path.join(home, "plugin-a");
+    const pluginB = path.join(home, "plugin-b");
+    mkdirSync(repo, { recursive: true });
+    writeJson(path.join(pluginA, ".claude-plugin", "plugin.json"), {
+      name: "a-b",
+      hooks: { SessionStart: [{ matcher: "startup", hooks: [{
+        type: "command", command: 'printf PRIVATE > "$CLAUDE_PLUGIN_DATA/state"',
+      }] }] },
+    });
+    writeJson(path.join(pluginB, ".claude-plugin", "plugin.json"), {
+      name: "a",
+      hooks: { SessionStart: [{ matcher: "resume", hooks: [{
+        type: "command", command: 'if [ -e "$CLAUDE_PLUGIN_DATA/state" ]; then printf LEAKED; else printf ISOLATED; fi',
+      }] }] },
+    });
+    registerUserPlugins(home, { "a-b@c": pluginA, "a@b-c": pluginB });
+    const loaded = await loadSettings(repo, { home });
+    await triggerSessionHooks("SessionStart", "startup", {
+      sessionId: "state", cwd: repo, hookEventName: "SessionStart", source: "startup",
+    }, loaded.settings);
+    const result = await triggerSessionHooks("SessionStart", "resume", {
+      sessionId: "state", cwd: repo, hookEventName: "SessionStart", source: "resume",
+    }, loaded.settings);
+    expect(result.additionalContext).toBe("ISOLATED");
+  });
+
   test("a plugin data-directory failure does not suppress user hooks", async () => {
     const root = tempRoot();
     const home = path.join(root, "home");

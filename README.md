@@ -58,7 +58,7 @@ A plugin-scope hooks declaration cannot point outside its own plugin directory; 
 
 Every plugin-sourced hook process receives `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA` (a persistent per-plugin data directory under the Claude config dir), and `CLAUDE_PROJECT_DIR` as real environment variables — never by rewriting the command string — so a shell-form `command` referencing `$CLAUDE_PLUGIN_ROOT` or `${CLAUDE_PLUGIN_ROOT}` resolves correctly even when the plugin's install path contains spaces or shell metacharacters, and two plugins that happen to author the identical relative command text both still run (their differing `CLAUDE_PLUGIN_ROOT` keeps them distinct for hook deduplication).
 
-User-scope plugins load unconditionally, like `~/.claude/settings.json`. Project-scope plugins load only for a trusted project, like `.claude/settings.json`; an untrusted project's own plugin registry can never load its own hooks or shadow a user-scope plugin's hooks. `disableAllHooks: true` from any loaded source disables plugin hooks along with every other source. Disabling OMP's `claude-plugins` discovery provider (the same toggle OMP's native Claude-plugin skill/agent/MCP discovery honors) disables plugin hook loading entirely.
+OMP-managed user-scope plugins load without a project trust requirement. Claude-origin user-scope plugins additionally require the `claude` or `claude-plugins` user-source opt-in. Project-scope plugins load only for a trusted project, like `.claude/settings.json`; an untrusted project's own plugin registry can never load its own hooks or shadow a user-scope plugin's hooks. `disableAllHooks: true` from any loaded source disables plugin hooks along with every other source. Disabling OMP's `claude-plugins` discovery provider (the same toggle OMP's native Claude-plugin skill/agent/MCP discovery honors) disables plugin hook loading entirely.
 
 ## Diagnostics
 
@@ -91,7 +91,7 @@ Supported event mappings include:
 - `UserPromptSubmit`
 - `Stop`
 
-Matching handlers are deduplicated by command and arguments and normally run in parallel. Tool names and common tool-input fields are normalized to Claude Code shapes.
+Matching handlers are deduplicated by command, arguments, and environment and normally run in parallel. Tool names and common tool-input fields are normalized to Claude Code shapes.
 
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts terminate the complete process group on macOS and Linux. Repeated blocking from a `Stop` hook is suppressed after one follow-up turn.
 

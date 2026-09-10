@@ -34,6 +34,8 @@ export function claimInjectedContext(content: string): boolean {
 /** Re-arm reminders when a new user prompt or compaction resets their context. */
 export function resetInjectedContext(): void {
   _injectedThisTurn.clear();
+  // Queued messages have not entered the old context and must stay deduplicated.
+  for (const content of _injectBuffer.content) _injectedThisTurn.add(content);
 }
 
 export type HookModuleContext = {

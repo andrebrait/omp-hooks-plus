@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import type { HookModuleContext } from "../hook-context";
+import { resetInjectedContext, type HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   HookRunResult,
@@ -44,6 +44,7 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
   });
 
   pi.on("session_compact", async (event, ctx) => {
+    resetInjectedContext();
     const trigger: "manual" | "auto" = "manual";
 
     const result = await triggerCompactHooks(

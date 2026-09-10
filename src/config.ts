@@ -423,7 +423,7 @@ function resolvePluginRoot(
     claudeConfigDir,
     "plugins",
     "data",
-    root.id.replace(/[^A-Za-z0-9_-]/g, "-"),
+    encodeURIComponent(root.id),
   );
   try {
     mkdirSync(dataDir, { recursive: true });
@@ -515,7 +515,7 @@ export async function loadSettings(
       projectTrusted ? cwd : undefined,
     );
     warnings.push(...rootWarnings);
-    const foreignUserEnabled = isUserSourceEnabled("claude-plugins") || isUserSourceEnabled("claude");
+    const foreignUserEnabled = isUserSourceEnabled(CLAUDE_PLUGINS_PROVIDER_ID) || isUserSourceEnabled("claude");
 
     for (const root of roots) {
       if (root.scope === "project" && !projectTrusted) continue;
