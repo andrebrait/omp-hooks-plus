@@ -35,6 +35,7 @@ export type LoadedSettings = {
 
 export type LoadSettingsOptions = {
   home?: string;
+  /** Override settings/data storage only; plugin registries follow OMP's active profile. */
   claudeConfigDir?: string;
   projectTrusted?: boolean;
 };
