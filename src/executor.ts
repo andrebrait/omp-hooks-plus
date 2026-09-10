@@ -185,6 +185,7 @@ function executeCommandHook(
     cwd,
     detached: useProcessGroup,
     stdio: ["pipe", "pipe", "pipe"],
+    env: hook.env ? { ...process.env, ...hook.env } : process.env,
   });
 
   let stdout = "";

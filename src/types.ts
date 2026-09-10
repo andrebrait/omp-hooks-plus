@@ -17,6 +17,14 @@ export type Hook = {
   shell?: "bash" | "powershell";
   async?: boolean;
   asyncRewake?: boolean;
+  /**
+   * Environment variables merged over process.env at spawn time. Populated only
+   * for plugin-sourced hooks (CLAUDE_PLUGIN_ROOT/CLAUDE_PLUGIN_DATA/CLAUDE_PROJECT_DIR);
+   * undefined for settings.json/.agents-sourced hooks (zero behavior change).
+   * Also folded into the dedup key so two plugins referencing the same relative
+   * command text still both execute.
+   */
+  env?: Record<string, string>;
 };
 
 export type HookGroup = {

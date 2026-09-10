@@ -20,8 +20,8 @@ const _injectBuffer: { content: string[]; details: Record<string, unknown>; time
 // to queue a dozen byte-identical hidden messages. Claude Code attaches its
 // additionalContext to the individual tool call, so a repeat reads as part of
 // that tool's result; OMP delivers standalone messages, where a repeat is pure
-// noise. Keyed on the exact content string, matching Claude's exact-command
-// handler dedup. Cleared on every new user prompt, so each turn is reminded once.
+// noise. Keyed on the exact content string, matching Claude's handler dedup.
+// Cleared on each new user prompt and compaction, which replaces prior context.
 const _injectedThisTurn = new Set<string>();
 
 /** Claim `content` for this turn. False when it was already injected. */
@@ -31,7 +31,7 @@ export function claimInjectedContext(content: string): boolean {
   return true;
 }
 
-/** Re-arm every reminder — called when a new user prompt starts a turn. */
+/** Re-arm reminders when a new user prompt or compaction resets their context. */
 export function resetInjectedContext(): void {
   _injectedThisTurn.clear();
 }
@@ -50,7 +50,7 @@ export type HookModuleContext = {
     details: Record<string, unknown>,
     triggerTurn?: boolean,
   ) => void;
-  settingsFor: (ctx: ExtensionContext) => SettingsFile | undefined;
+  settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>;
   buildToolResponse: (event: {
     content: unknown;
     details?: unknown;
@@ -101,9 +101,9 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
         _injectBuffer.timer = undefined;
       }, 50);
     },
-    settingsFor: (ctx: ExtensionContext) => {
+    settingsFor: async (ctx: ExtensionContext) => {
       const projectTrusted = ctx.isProjectTrusted();
-      const loaded = loadSettings(ctx.cwd, { projectTrusted });
+      const loaded = await loadSettings(ctx.cwd, { projectTrusted });
       shared.currentLoad = loaded;
       shared.currentSettings = loaded.settings;
       return loaded.settings;
@@ -126,13 +126,22 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
       return toolResponse;
     },
     triggerSessionStartHook: async (matcher, ctx) => {
-      shared.settingsFor(ctx);
+      await shared.settingsFor(ctx);
       const sessionId = shared.getSessionId(ctx);
-      const dedupeKey = `${matcher}:${sessionId}`;
-      if (shared.firedSessionStartKeys.has(dedupeKey)) {
-        return;
+      if (matcher === "compact") {
+        // Compaction legitimately recurs within a session — unlike startup/resume,
+        // it must reinject its bootstrap context every time, not just once. Reset
+        // the per-turn content-dedup guard too: without it, injectHiddenContext's
+        // claimInjectedContext would silently drop a second compaction's
+        // byte-identical content as a "duplicate" of the first.
+        resetInjectedContext();
+      } else {
+        const dedupeKey = `${matcher}:${sessionId}`;
+        if (shared.firedSessionStartKeys.has(dedupeKey)) {
+          return;
+        }
+        shared.firedSessionStartKeys.add(dedupeKey);
       }
-      shared.firedSessionStartKeys.add(dedupeKey);
 
       const result = await triggerSessionHooks(
         "SessionStart",

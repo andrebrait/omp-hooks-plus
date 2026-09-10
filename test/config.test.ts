@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("Claude settings hierarchy", () => {
-  test("merges user, project, and local hooks in scope order", () => {
+  test("merges user, project, and local hooks in scope order", async () => {
     const root = tempRoot();
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
@@ -43,7 +43,7 @@ describe("Claude settings hierarchy", () => {
       hooks: { Stop: [{ hooks: [hook("local")] }] },
     });
 
-    const loaded = loadSettings(nested, { home, projectTrusted: true });
+    const loaded = await loadSettings(nested, { home, projectTrusted: true });
 
     expect(loaded.mode).toBe("claude-native");
     expect(loaded.projectRoot).toBe(repo);
@@ -59,7 +59,7 @@ describe("Claude settings hierarchy", () => {
     ).toEqual(["user", "project", "local"]);
   });
 
-  test("uses .agents hooks as project authority without double-running Claude project hooks", () => {
+  test("uses .agents hooks as project authority without double-running Claude project hooks", async () => {
     const root = tempRoot();
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
@@ -74,7 +74,7 @@ describe("Claude settings hierarchy", () => {
       hooks: { PreToolUse: [{ hooks: [hook("project-adapter")] }] },
     });
 
-    const loaded = loadSettings(repo, { home, projectTrusted: true });
+    const loaded = await loadSettings(repo, { home, projectTrusted: true });
 
     expect(loaded.mode).toBe("cross-vendor");
     expect(loaded.sources.map((source) => source.scope)).toEqual([
@@ -88,7 +88,7 @@ describe("Claude settings hierarchy", () => {
     ).toEqual(["user", "agents"]);
   });
 
-  test("loads only user hooks for an untrusted project", () => {
+  test("loads only user hooks for an untrusted project", async () => {
     const root = tempRoot();
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
@@ -100,14 +100,14 @@ describe("Claude settings hierarchy", () => {
       hooks: { Stop: [{ hooks: [hook("project")] }] },
     });
 
-    const loaded = loadSettings(repo, { home, projectTrusted: false });
+    const loaded = await loadSettings(repo, { home, projectTrusted: false });
 
     expect(loaded.mode).toBe("user-only");
     expect(loaded.sources.map((source) => source.scope)).toEqual(["user"]);
     expect(getHookGroups(loaded.settings, "Stop")).toHaveLength(1);
   });
 
-  test("honors disableAllHooks across loaded scopes", () => {
+  test("honors disableAllHooks across loaded scopes", async () => {
     const root = tempRoot();
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
@@ -119,11 +119,11 @@ describe("Claude settings hierarchy", () => {
       disableAllHooks: true,
     });
 
-    const loaded = loadSettings(repo, { home, projectTrusted: true });
+    const loaded = await loadSettings(repo, { home, projectTrusted: true });
 
     expect(loaded.settings).toBeUndefined();
   });
-  test("observes settings changes without restarting the extension", () => {
+  test("observes settings changes without restarting the extension", async () => {
     const root = tempRoot();
     const home = path.join(root, "home");
     const repo = path.join(root, "repo");
@@ -133,11 +133,11 @@ describe("Claude settings hierarchy", () => {
       hooks: { Stop: [{ hooks: [hook("before")] }] },
     });
 
-    const before = loadSettings(repo, { home, projectTrusted: true });
+    const before = await loadSettings(repo, { home, projectTrusted: true });
     writeJson(settingsPath, {
       hooks: { Stop: [{ hooks: [hook("after")] }] },
     });
-    const after = loadSettings(repo, { home, projectTrusted: true });
+    const after = await loadSettings(repo, { home, projectTrusted: true });
 
     expect(getHookGroups(before.settings, "Stop")[0]?.hooks?.[0]?.command)
       .toBe("before");

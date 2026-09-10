@@ -1,4 +1,5 @@
 import { getHookGroups, type LoadedSettings } from "./config";
+import { hookDedupeKey } from "./hooks/shared";
 import type { HookEventName } from "./types";
 
 const EVENTS: HookEventName[] = [
@@ -23,9 +24,7 @@ export function formatDoctorReport(loaded: LoadedSettings): string {
     for (const group of getHookGroups(loaded.settings, event)) {
       for (const hook of group.hooks ?? []) {
         if (hook.type !== "command" || !hook.command) continue;
-        const key = hook.args
-          ? `${hook.command}\0${JSON.stringify(hook.args)}`
-          : hook.command;
+        const key = hookDedupeKey(hook);
         if (seen.has(key)) {
           duplicatesSuppressed++;
           continue;

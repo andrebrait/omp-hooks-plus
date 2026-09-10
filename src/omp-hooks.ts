@@ -21,7 +21,7 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Usage: /claude-compat doctor", "warning");
         return;
       }
-      const loaded = loadSettings(ctx.cwd, {
+      const loaded = await loadSettings(ctx.cwd, {
         projectTrusted: ctx.isProjectTrusted(),
       });
       ctx.ui.notify(formatDoctorReport(loaded), "info");

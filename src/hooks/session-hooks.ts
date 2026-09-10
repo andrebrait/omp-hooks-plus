@@ -55,7 +55,7 @@ export function registerSessionHooks(
         asyncContextSink: (content, details, triggerTurn) =>
           shared.injectHiddenContext(content, details, triggerTurn),
       },
-      shared.settingsFor(ctx),
+      await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 

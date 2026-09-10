@@ -282,9 +282,17 @@ export async function executeParsedHook(
 // deduplicated automatically.")
 // ============================================================================
 
-/** Dedup key: command + JSON(args). Matches Claude Code's dedup for command hooks. */
-function hookDedupeKey(hook: Hook): string {
-  return hook.args ? `${hook.command}\0${JSON.stringify(hook.args)}` : hook.command;
+/**
+ * Dedup key: command + JSON(args) + JSON(env). Matches Claude Code's dedup for
+ * command hooks, extended with provenance/env so two plugins that both reference
+ * "$CLAUDE_PLUGIN_ROOT/..." with identical relative command text (and therefore
+ * identical literal `command` strings, since env vars are expanded by the shell
+ * at spawn time, not textually substituted) are NOT wrongly collapsed into one
+ * execution — their distinct CLAUDE_PLUGIN_ROOT values make the key distinct.
+ */
+export function hookDedupeKey(hook: Hook): string {
+  const base = hook.args ? `${hook.command}\0${JSON.stringify(hook.args)}` : hook.command;
+  return hook.env ? `${base}\0${JSON.stringify(hook.env)}` : base;
 }
 
 /** A hook paired with its original config index for stable ordering. */
