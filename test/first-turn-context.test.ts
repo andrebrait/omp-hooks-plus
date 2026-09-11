@@ -18,7 +18,6 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
     resetInjectedContext();
     type Handler = (event: unknown, ctx: ExtensionContext) => Promise<{ block?: boolean; reason?: string } | void>;
     const handlers = new Map<string, Handler>();
-    const delivered = Promise.withResolvers<void>();
     const pending: Promise<unknown>[] = [];
     let session: AgentSession;
     const pi = {
@@ -27,7 +26,7 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
         message: Parameters<ExtensionAPI["sendMessage"]>[0],
         options: Parameters<ExtensionAPI["sendMessage"]>[1],
       ) => {
-        pending.push(session.sendCustomMessage(message, options).finally(() => delivered.resolve()));
+        pending.push(session.sendCustomMessage(message, options));
       },
     } as unknown as ExtensionAPI;
     const shared = createHookContext(pi);
@@ -94,7 +93,6 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       expect(nextStep).toContain("completed second");
       expect(nextStep).not.toContain("Skipped due to pending system advisory");
     } finally {
-      await delivered.promise;
       await Promise.all(pending);
       await session.dispose();
       auth.close();
