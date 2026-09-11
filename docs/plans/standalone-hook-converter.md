@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript ESM, Bun, Node-compatible filesystem/crypto/process APIs, existing Bun tests, and public OMP interfaces. Proposed parser dependency and host interface changes require approval below.
 
-**Spec:** [Specification](../specs/standalone-hook-converter.md): baseline approved 2026-09-11; review clarifications for explicit plugin scope, concurrent-query coalescing, and activation metadata await user review with this plan.
+**Spec:** [Specification](../specs/standalone-hook-converter.md): baseline approved 2026-09-11; marked review clarifications for scope, activation, safe report projection, and the cooperative trust boundary await user review with this plan.
 
 ## Global constraints
 
@@ -108,9 +108,10 @@ export type Declaration = {
   event: string;
   order: number;
   scope: { install: SourceScope; container?: Locator };
-  raw: Record<string, unknown>;
+  fields: { pointer: string; valueType: string; sha256: string }[];
   fingerprint: string;
 };
+export type InventoryDeclaration = Declaration & { raw: Record<string, unknown> };
 export type AnalysisOptions = {
   target?: string;
   coveragePath?: string;
@@ -127,6 +128,7 @@ export type ArtifactPlan = {
 export type Analysis = {
   status: "complete" | "unresolved";
   sourceRoot: string;
+  declarations: InventoryDeclaration[];
   report: CoverageReport;
   files: ArtifactFile[];
 };
@@ -185,6 +187,8 @@ export declare function checkArtifact(
 
 `deployment` defaults to `standalone`; only the automatic adapter requests `automatic`, not a user-supplied coverage record. Activation capability/control identifiers are validated against the selected profile. The report records required extension enablement, trust, scope and (for automatic mode) source/provider controls, but runtime rechecks their actual state. `originalPiEntrypoints` are contained source-relative identities resolved against the host-selected plugin instance, not serialized absolute paths. Metadata never grants authorization or overrides an input disable directive.
 
+`InventoryDeclaration.raw` is internal analysis data, never part of `CoverageReport`. Serialize report declarations with an explicit allowlist of `locator`, `event`, `order`, `scope`, `fields`, and `fingerprint`; never use object spreading or generic JSON serialization of an inventory declaration. Field descriptors contain relative pointers, validated JSON value types, and hashes, not original values. Unknown/sensitive values must not leak through diagnostics or draft text either. Retain full original values only in memory for analysis and authorized source-backed review; resource/code emission remains subject to the specification's separate safe-selection rules.
+
 Runtime policy seam in `runtime/context.ts`:
 
 ```ts
@@ -224,6 +228,7 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 **Consumes:** `SourceInput`, `AnalysisOptions`. **Produces:** `inspectSource`; working `inspect` CLI and versioned source/target tables. This is a usable vertical slice, not an empty package scaffold.
 
 - [ ] Create hostile-source fixtures in temporary directories: unknown event/type/field, malformed JSON, default and referenced hook files, inline manifest hooks, settings input, nested skill/agent frontmatter, and a pi file that would create a sentinel if imported. Include a declared event outside the original nine-event set.
+- [ ] Include an unknown handler field containing a distinctive credential-like sentinel. Assert its locator/type/fingerprint remains in both inspect output and generated coverage, while its value is absent from JSON reports, human diagnostics, and inert draft text. Changing that value must still invalidate the declaration fingerprint. The test protects the report boundary without discarding the unknown declaration.
 - [ ] Assert inventory retains every valid declaration and original provenance/order/scope; malformed structure returns exit `1`; unknown well-formed contracts remain visible with exit `2`; the sentinel is absent. Run `bun test packages/converter/test/source.test.ts` before implementing inspection and record the failure.
 - [ ] Capture the approved Claude reference into the checked-in snapshot during development. Record every documented event, handler type, field, input, scope, output effect, and async/lifecycle rule. Verify its identifier/digest. Live documentation is never read by the shipped CLI.
 - [ ] For every snapshot event/type combination, assess the real target contract. Implement all fully supported mappings, not merely the nine legacy events. Represent missing target semantics separately from unfinished conversion support. Preserve unknown source keys outside the snapshot.

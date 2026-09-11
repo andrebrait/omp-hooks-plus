@@ -1,6 +1,6 @@
 # Standalone hook converter
 
-Status: baseline approved by the user on 2026-09-11. Implementation-plan review clarifications for explicit plugin scope, concurrent ownership queries, and structured activation requirements await user review with the plan.
+Status: baseline approved by the user on 2026-09-11. Implementation-plan review clarifications for explicit plugin scope, concurrent ownership queries, structured activation requirements, safe report projection, and the cooperative trust boundary await user review with the plan.
 
 ## Objective
 
@@ -81,7 +81,7 @@ All commands accept `--target <profile>` to select a bundled OMP capability prof
 
 ## Inventory, capability decisions, and evidence
 
-Give each declaration a stable source locator consisting of source kind, source-root-relative file, and JSON pointer or frontmatter location. Retain the original event, matcher, handler fields, declaration order, and activation scope. Relative source locators are independent of the user's absolute installation directory.
+Give each declaration a stable source locator consisting of source kind, source-root-relative file, and JSON pointer or frontmatter location. Retain the original event, matcher, handler fields, declaration order, and activation scope in the internal inventory. Reports expose provenance and field descriptors/fingerprints rather than unredacted arbitrary field values; unknown fields remain identifiable without copying their potentially secret contents into JSON, diagnostics, or draft text. The skill reads original values from the explicitly supplied source when authorized, not from a secret-bearing coverage report. Relative source locators are independent of the user's absolute installation directory.
 
 Fingerprint declaration content and the local files on which a coverage decision depends. A correspondence involving pi code includes the relevant TypeScript and local import dependencies; a script-backed decision includes its scripts and known local resources. Unresolved dynamic dependencies remain visible. A declaration locator is not a freshness check or a runtime deduplication key.
 
@@ -148,6 +148,8 @@ Use the stable event-bus channel `omp-hook-converter:ownership`. Every packet ca
 6. **Late changes and disposal:** ownership is sealed for that generation. Late registration, claim changes, or a late response cannot enable callbacks; broadcast `kind: "invalidate"`, stop new conflicting dispatches, and require a fresh host generation/handshake. On reload/disposal, disable callbacks, clear pending deadlines/state, and unsubscribe listeners. Packets from old generations are ignored. An already-started external side effect cannot be undone; late participants remain disabled rather than replaying that occurrence.
 
 The bus does not await asynchronous listeners. Protocol callbacks must explicitly send state/ack packets after their work finishes; the initiator waits for those packets, not for `emit()` to return. The handshake is an activation protocol, not an exactly-once guarantee across process crashes or arbitrary non-cooperative extension code. Test both registration orders, delayed/failed initialization, timeout, protocol mismatch, two independently bundled runtimes, and reload before accepting the seam.
+
+The ownership bus assumes intentionally cooperative, trusted in-process participants. Matching a packet's participant ID to the host roster validates its claimed identity but does not authenticate its publisher. Reject malformed packets, unselected identities, and wrong session/generation/request values; do not claim to reject a malicious extension impersonating a valid participant on the shared bus. Protecting against that actor requires a separately designed authenticated host channel or process isolation, outside this protocol's guarantee. Installing arbitrary malicious extension code is not made safe by this handshake.
 
 ### Activation policy by deployment mode
 
