@@ -130,6 +130,20 @@ export type ActivationRequirements = {
   deployment: "either-or";
   originalPiEntrypoints: string[];
 };
+export type BindingIdentity =
+  | { kind: "adapter"; ruleId: string }
+  | {
+      kind: "pi" | "native";
+      entrypoint: string;
+      exportName: string;
+      registrations: { file: string; start: number; end: number; event: string }[];
+    };
+export type BindingCandidate = {
+  binding: BindingIdentity;
+  declarationCandidates: Locator[];
+  files: FileDigest[];
+  diagnostics: Diagnostic[];
+};
 export type CoverageReport = {
   schemaVersion: 1;
   converterVersion: string;
@@ -138,6 +152,7 @@ export type CoverageReport = {
   activation: ActivationRequirements;
   source: { kind: SourceInput["kind"]; entry: string; scope: SourceScope; name?: string };
   declarations: Declaration[];
+  bindingCandidates: BindingCandidate[];
   decisions: CoverageDecision[];
   files: FileDigest[];
   diagnostics: Diagnostic[];
@@ -145,7 +160,7 @@ export type CoverageReport = {
 export type CoverageDecision = {
   declarations: Locator[];
   state: CoverageState;
-  implementation?: { kind: "adapter" | "pi" | "native"; files: FileDigest[] };
+  implementation?: { bindings: BindingIdentity[]; files: FileDigest[] };
   dependencies: FileDigest[];
   evidence: {
     kind: "rule" | "review" | "scenario";
@@ -173,22 +188,39 @@ export declare function checkArtifact(
 
 `InventoryDeclaration.raw` is internal analysis data, never part of `CoverageReport`. Serialize report declarations with an explicit allowlist of `locator`, `event`, `order`, `scope`, `fields`, and `fingerprint`; never use object spreading or generic JSON serialization of an inventory declaration. Field descriptors contain relative pointers, validated JSON value types, and hashes, not original values. Unknown/sensitive values must not leak through diagnostics or draft text either. Retain full original values only in memory for analysis and authorized source-backed review; resource/code emission remains subject to the specification's separate safe-selection rules.
 
+The library caller explicitly supplies the source and receives in-memory working data, including `InventoryDeclaration.raw`. That is not an authorization boundary between the converter and its caller, and neither `Analysis` nor its resource bytes is safe to log wholesale. Only the allowlisted `CoverageReport` is a public presentation/serialization surface. Do not add an opaque handle registry or a second source-reading API merely to hide bytes from the same caller that requested their analysis.
+
+Binding candidates are inspection results, not selected implementations or proof of correspondence; `declarationCandidates` may be empty. Selected decisions name exact adapter rules or pi/native entrypoint exports and registration spans, not only file digests. Paths are contained relative to the source or reviewed artifact root; registration offsets are zero-based UTF-8 byte ranges in the fingerprinted file. Anonymous callbacks are identified by their registration span. Resolve every selected identity against current bytes and reject stale or ambiguous spans; changing the callback's file invalidates its correspondence even if its event name is unchanged. Preserve mixed unrelated functionality through reviewed bindings rather than selecting an entire file by name.
+
 Runtime policy seam in `runtime/context.ts`:
 
 ```ts
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { SettingsFile } from "./types";
+import type { CoverageReport } from "../contracts";
+export type RuntimeLoad =
+  | { status: "ready"; settings: SettingsFile }
+  | { status: "disabled" };
 export type RuntimePolicy = {
-  settingsFor(ctx: ExtensionContext): Promise<SettingsFile | undefined>;
+  load(ctx: ExtensionContext): Promise<RuntimeLoad>;
   onDiagnostic(message: string): void;
 };
+export declare function createStandalonePolicy(
+  pi: ExtensionAPI,
+  report: CoverageReport,
+  settings: SettingsFile,
+): RuntimePolicy;
 export declare function registerHooks(
   pi: ExtensionAPI,
   policy: RuntimePolicy,
 ): { dispose(): void };
 ```
 
-The policy seam removes the existing hard dependency from `createHookContext` to root `loadSettings`. Root retains the latest `LoadedSettings` in its own closure for doctor output. Generated policy returns only artifact settings after its own target/scope/coverage checks. Neither policy queries other extensions, changes their enable state, or participates in an ownership handshake.
+The policy seam removes the existing hard dependency from `createHookContext` to root `loadSettings`. Root retains the latest `LoadedSettings` in its closure for doctor output; its `load` returns `ready` with the selected settings or `disabled` for intentionally excluded/hookless sources. Preserve the existing ordered concatenation of selected hook groups, not an invented project-over-user override.
+
+`createStandalonePolicy` validates static artifact/profile requirements before event registration and captures the selected profile and artifact settings. Its `load(ctx)` checks available public context controls, including required project trust, before returning `ready`; explicit disable directives return `disabled`. Invalid artifacts or unavailable required contracts throw a specific error, never return `disabled`. `registerHooks` awaits `load` before any hook effect or context delivery, reports a thrown error through `onDiagnostic`, surfaces the failure to OMP, and leaves that runtime disabled until reload. Context-dependent checks run at dispatch because `ExtensionContext` is not available during factory creation; registered callbacks remain inert until their checks pass.
+
+The supported host-loader contract owns extension enablement and installation-root scope: user/project artifacts must use the corresponding loader roots under the documented installation procedure. Verify those procedures against the target, not a fabricated context accessor. No code claims to inspect other active extensions or certify the operator's installation. Local scope stays unresolved until a local-equivalent procedure is proved. Neither runtime policy changes another extension's enable state or participates in a handshake.
 
 ## Ordered tasks
 
@@ -204,6 +236,7 @@ The policy seam removes the existing hard dependency from `createHookContext` to
 - [ ] Capture the approved Claude reference into the checked-in snapshot during development. Record every documented event, handler type, field, input, scope, output effect, and async/lifecycle rule. Verify its identifier/digest. Live documentation is never read by the shipped CLI.
 - [ ] For every snapshot event/type combination, assess the real target contract. Implement all fully supported mappings, not merely the nine legacy events. Represent missing target semantics separately from unfinished conversion support. Preserve unknown source keys outside the snapshot.
 - [ ] Verify each proposed OMP mapping against the pinned host's public events, effects, scope/trust controls, and lifecycle behavior. Use real host loaders/runners for focused smoke scenarios without model/network calls. Do not infer that the package version alone proves support, and do not require an extension roster or propose an ownership API.
+- [ ] Cover a `local` source explicitly: absent a verified local-equivalent target procedure, inspect/convert must remain unresolved and emit no installable package. Ordinary project-root installation alone is not proof of personal local scope. Keep this separate from supported user/project fixtures; a target audit may establish a true `target-gap`, but missing converter proof remains `needs-review`.
 - [ ] Parse explicit JSON/frontmatter using data parsers only. Enumerate manifest/default/referenced files with stable sorted traversal, root-relative locators and exact JSON pointers/frontmatter positions. Reject lexical/symlink escapes before reading. Do not call ambient OMP discovery or an importer to find declarations.
 - [ ] Implement argument handling with `node:util.parseArgs`; require explicit `--scope` for both plugin and file input, additionally enforce file input root and valid conversion names, and reject unknown targets. A missing plugin scope is invalid input, not an inferred user scope. `check` reuses recorded scope/name. JSON and human output derive from one analysis object. Operational/validation exceptions are presented as exit `1`, never as `target-gap`.
 - [ ] Add workspace membership and an independent converter bin/exports map. Keep OMP value imports out of the analysis/CLI entry graph; type-only OMP imports are erased. Typecheck both packages and emit the converter's distributable CLI/library/declarations. Do not add a direct dependency on the host's discovery barrel.
@@ -216,6 +249,7 @@ The policy seam removes the existing hard dependency from `createHookContext` to
 **Consumes:** `InventoryDeclaration[]`, explicit source roots, optional coverage report. **Produces:** validated `CoverageDecision[]`, candidate pi relationships, and closure digests used by inspection/generation/checking.
 
 - [ ] Write a regression where pi implements one source declaration, a second Claude declaration is absent from pi, and an unrelated pi command shares a handler/module. Expected: both source declarations remain accounted for; only reviewed correspondence selects pi; the unrelated command is retained.
+- [ ] Inspect an unselected pi candidate and assert its entrypoint/export/registration provenance appears without becoming selected coverage. In a file with two registrations, select only the reviewed registration for its source declaration; the other registration remains separately accounted for. Reject a stale span/export reference even if the file's event names still match.
 - [ ] Add stale-evidence cases for script/resource/local import, package version/manifest/lock integrity, mutable workspace dependency, and edited native output. Moving identical source bytes alone must not invalidate coverage. Missing dynamic/unfrozen dependencies remain `needs-review`.
 - [ ] Run `bun test packages/converter/test/coverage.test.ts` and observe failures before implementing selection/freshness.
 - [ ] Use TypeScript's parser to inventory imports and candidate registrations without evaluating code. Resolve local imports with containment checks; fingerprint relevant resolved dependency manifests/lock metadata and actual mutable dependency files. Unresolved dynamic import/require or hidden resource dependency is diagnostic, not an assumed empty closure.
@@ -232,7 +266,7 @@ The policy seam removes the existing hard dependency from `createHookContext` to
 - [ ] Run the existing focused behavior tests before moving code. Record results for executor/output contracts, plugin trust/disable/environment behavior, first-turn context, compaction, and stop-loop handling.
 - [ ] Use native LSP references for exported symbols before moving them. Move `types`, `helpers`, `type-guards`, executor, shared hook functions, all event registration modules, and reusable configuration parsing/matching to converter runtime ownership. Update all callers in the same cutover; remove obsolete root files rather than re-exporting them.
 - [ ] Keep `loadSettings`, provider/source opt-ins, project trust, user/project/local hierarchy discovery, and `LoadedSettings` in root `config.ts`. Extract reusable parsing from that file; the new complete inventory is not implemented by reusing its lossy supported-event projection.
-- [ ] Replace the context factory's direct `loadSettings` call with `RuntimePolicy.settingsFor`. Root supplies a closure that stores its latest `LoadedSettings` and returns its settings. Generated packages will supply artifact-only settings. Preserve notification and doctor behavior.
+- [ ] Replace the context factory's direct `loadSettings` call with `RuntimePolicy.load`. Root supplies a closure storing its latest `LoadedSettings` and returning `ready`/`disabled` according to existing source-selection semantics. Generated packages use `createStandalonePolicy` with their report, profile requirements, and artifact-only settings. Preserve notification/doctor behavior and distinguish thrown invalid-activation errors from intentional disablement.
 - [ ] Move pure execution tests into converter tests and update import paths; retain root consumer integration tests. Do not duplicate the test corpus or rewrite behavioral assertions into source-text/import assertions.
 - [ ] Run moved tests and retained root regressions. Expected: same observable policy, stdout/JSON effects, timeouts, environment isolation, first-turn delivery, compaction ordering, and stop behavior. Commit the atomic clean cutover.
 
@@ -347,7 +381,7 @@ One integration owner controls shared contracts and clean-cutover files. Do not 
 | AC-12 | 7 | Original/native deny prevents actual tool execution; allowed case executes in both. |
 | AC-13 | 3, 4, 8 | Existing trust/disable/environment/context/compaction/stop behavior tests remain green. |
 | AC-14 | 1, 2, 5 | Full snapshot and unknown-key inventory assessed independently of pi, with contract-level rules. |
-| AC-15 | 1, 5, 6 | Explicit file identity/root/scope, real project-relative command cwd, disable and scope enforcement. |
+| AC-15 | 1, 5, 6 | Explicit file identity/root/scope, real project-relative cwd and disable behavior; unsupported local mapping yields a non-installable draft instead of project-wide activation. |
 
 ## Planning verification and handoff
 
