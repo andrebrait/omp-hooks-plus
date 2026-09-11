@@ -4,50 +4,38 @@
 
 **Goal:** Build an offline Claude-to-OMP converter whose shared runtime is consumed by `omp-hooks-plus`, with optional pi reuse and skill-assisted native ports.
 
-**Architecture:** Introduce `packages/converter` as the only owner of reusable parsing, adaptation, execution, generation, and ownership coordination. Keep automatic OMP discovery and trust policy in the root package. Generated packages bundle their runtime and resources; they do not import the root package or consult ambient Claude configuration.
+**Architecture:** Introduce `packages/converter` as the only owner of reusable parsing, adaptation, execution, and generation. Keep automatic OMP discovery and trust policy in the root package. Generated packages bundle their runtime and resources; deployment is either the automatic bridge or the generated replacement for a source, never overlapping installations.
 
-**Tech Stack:** TypeScript ESM, Bun, Node-compatible filesystem/crypto/process APIs, existing Bun tests, and public OMP interfaces. Proposed parser dependency and host interface changes require approval below.
+**Tech Stack:** TypeScript ESM, Bun, Node-compatible filesystem/crypto/process APIs, existing Bun tests, and public OMP interfaces. Dependency, publication-platform, and CI proposals require approval below; no host activation-API change is proposed.
 
-**Spec:** [Specification](../specs/standalone-hook-converter.md): baseline approved 2026-09-11; marked review clarifications for scope, activation, safe report projection, and the cooperative trust boundary await user review with this plan.
+**Spec:** [Specification](../specs/standalone-hook-converter.md): baseline approved 2026-09-11; the user subsequently selected either-or deployment. This revision removes simultaneous coexistence from the plan and awaits review.
 
 ## Global constraints
 
 - Package and executable name: `omp-hook-converter`; directory: `packages/converter/`; root remains `omp-hooks-plus`.
 - Claude only. Inventory original declarations independently of any pi implementation.
 - No source imports, source execution, model calls, installation, or network access during `inspect`, `convert`, or `check`.
-- Preserve the root package's existing supported behavior and OMP floor `>=18.1.16`; newer activation guarantees require an exercised capability profile.
+- Preserve the root package's existing supported behavior and OMP floor `>=18.1.16`; generated mappings and required scope/trust controls must be exercised against their selected capability profile.
 - Initial host evidence is OMP integration revision `acef0cdc9ca35468ee862cc78061860323b2eabb`, package version `18.1.17`. A release version alone does not identify downstream capabilities.
 - Source contract identifier: `claude-hooks-2026-09-11`. Every report records its content digest and the selected target profile.
 - Coverage states: `adapted`, `covered`, `needs-review`, `target-gap`. Malformed input is an error. Missing converter support is not a target gap.
-- Ownership protocol major `1`; channel `omp-hook-converter:ownership`; total query-to-ack deadline `1,000` milliseconds; no timeout-to-fallback.
+- Either-or deployment per source: no ownership bus, complete extension-roster requirement, automatic suppression/fallback, or new host activation API. Users disable overlapping originals before enabling replacements.
 - Source scope is preserved. Analysis containment is not the command working directory. Commands run in the active OMP project.
 - No overwrite, source mutation, implicit authorization, process-global context deduplication, duplicate maintained runtimes, compatibility re-export shims, or event-name-based equivalence inference.
 - Root verification remains `bun test`, `bun run typecheck`, and `bun run build`, extended to both packages without weakened gates.
-- Ask before dependencies, CI changes, or OMP-core changes. This document proposes them; it does not authorize them or start implementation.
+- Ask before dependencies, publication-platform restrictions, or CI changes. No OMP-core change is in scope. This document does not authorize implementation.
 
 ## Execution gates and evidence
 
-### G0: Host activation metadata — blocked pending separate host proposal
+### Either-or deployment removes the host activation prerequisite
 
-A real temporary probe executed against the integration checkout with Bun. It bound an observer alongside a successful competing factory, then alongside a factory throwing during initialization. The loader returned two successful extensions in the first case and one success plus one error in the second. Both observer callbacks received the same public context surface, with no activation snapshot or extension-path accessor. The probe exited `0`, with no stderr, and removed its temporary auth database/directory.
+The earlier real-host probe found no public complete selected-roster/init-outcome snapshot. That evidence remains valid, but the user has now explicitly chosen either-or deployment rather than automatic coexistence. The converter therefore needs neither that snapshot nor a new OMP ownership API.
 
-Relevant source:
+An operator disables overlapping bridge/original pi bindings, reloads or restarts OMP, and then enables the generated replacement. If current controls cannot exclude one source from the bridge, disable the bridge rather than introducing a new exclusion feature. Rollback reverses those steps explicitly; failures never enable an alternative implementation automatically. Unsupported overlapping installations may execute twice, and offline checking does not certify their absence.
 
-- `packages/coding-agent/src/extensibility/extensions/loader.ts`: `bindPreparedExtensions` retains success and error results outside the extension callback.
-- `packages/coding-agent/src/extensibility/extensions/types.ts`: `ExtensionAPI` and `ExtensionContext` expose no selected-roster/init-outcome snapshot.
-- `packages/coding-agent/src/extensibility/extensions/runner.ts`: `getExtensionPaths` reports successful extensions on the runner, but the owning runner is not exposed to extensions; `createContext` provides no substitute.
-- `packages/coding-agent/src/sdk.ts`: discovery options, preloaded extensions, inline factories, and initialization failures prevent reconstructing the selected roster by rescanning disk.
-- `packages/coding-agent/src/utils/event-bus.ts`: the public bus supports communication, not host lifecycle metadata; an SDK caller may share it across sessions.
+Retain ordinary target capability, scope/trust, and session-lifecycle verification. Assess those contracts through existing public OMP interfaces and loader behavior; a specific unsupported contract becomes a diagnostic, not a blanket dependency on a new global activation API. Coverage reconciliation inside one artifact still selects a single implementation for each source behavior.
 
-Consequently the current target cannot establish the approved mixed-source ownership guarantee. Do not invent an existing `getExtensionActivationSnapshot()` accessor, access private handler registries, infer an empty roster, or substitute an extension-generated random session token.
-
-**Separate proposal:** add a public, host-owned activation snapshot facility to OMP, accessible during extension preparation and first dispatch. It must provide a shared opaque session key, monotonic generation, factory-binding barrier, complete selected identities (including inline/preloaded and failed factories), and trustworthy initialization/callback-safety outcomes. It must invalidate before a reload can introduce callbacks and provide disposal notification. Failed arbitrary factories may already have registered bus listeners or external side effects: their outcome is `unknown`, not automatically safe to replace. Only the host/cooperative participant's proven inert state permits `unavailable`.
-
-The snapshot must distinguish selected source path from opaque extension identity, so a generated artifact can detect an independently selected original pi entrypoint. It must include effective installation scope/trust evidence needed to prevent project/local artifacts from becoming user-wide. It must be session-scoped even with a shared event bus. These requirements need a separate OMP design and user approval; no core file is changed by this plan.
-
-**Gate passes only when:** that separately approved public contract exists on a pinned target and the real-host tests in Task 1 pass. All subsequent implementation tasks depend on this gate. Completing analysis-only tooling on the old host would not satisfy AC-03, AC-04, or AC-06.
-
-### G1: Explicit approvals before affected tasks
+### Explicit approvals before affected tasks
 
 1. **Dependency proposal:** use `typescript` as a converter dependency for syntax-only pi import/registration analysis. It already exists as a development dependency but making it part of the independently installed converter is a dependency change. Use Bun's YAML parser for frontmatter, not a second YAML library. Never execute the parsed TypeScript. TypeScript's compiler API is not a semantic-equivalence oracle.
 2. **Publication platform proposal:** initially verify atomic directory publication on Linux using Bun FFI and libc `renameat2(..., RENAME_NOREPLACE)`. This adds no npm dependency but introduces a Linux-specific capability requirement for `convert`. `inspect` and `check` remain portable Bun operations. Other systems must reject publication before writing output until an equivalent no-replace primitive is separately implemented and tested. Approval of this initial platform boundary is required; a check-then-rename fallback is not acceptable.
@@ -68,11 +56,11 @@ If any proposal is declined, revise that proposal and its dependent tasks with t
 | `packages/converter/src/artifact.ts`, `publish.ts`, `cli.ts` | Deterministic plans, safe publication, and argument/diagnostic presentation. |
 | `packages/converter/src/runtime/types.ts`, `helpers.ts`, `type-guards.ts`, `config.ts` | Move reusable existing data types, helpers, parsers, matching and merging; remove root copies. |
 | `packages/converter/src/runtime/executor.ts`, `hooks/*.ts` | Move existing execution, result interpretation, and OMP registration logic together. Separate pure analysis imports from this runtime graph. |
-| `packages/converter/src/runtime/context.ts`, `ownership.ts`, `index.ts` | Session-local delivery, activation protocol, public runtime entry. |
+| `packages/converter/src/runtime/context.ts`, `index.ts` | Session-local delivery and public runtime entry; no cross-package ownership module. |
 | `src/config.ts` | Retain OMP discovery, trust/source enablement, hierarchy selection, and `LoadedSettings` diagnostics; import converter parsing. |
 | `src/omp-hooks.ts`, `src/doctor.ts` | Retain root entrypoint and doctor command; supply root policy to shared runtime. |
 | `test/` | Retain automatic-consumer integration regressions; migrate pure execution tests without duplicate copies. |
-| `packages/converter/test/` | Converter safety/coverage/runtime regressions and host activation contract checks. |
+| `packages/converter/test/` | Converter safety, coverage, runtime, and either-or deployment regressions. |
 | `skills/convert-claude-hooks/SKILL.md` | Optional CLI-driven completion/native-port workflow, shipped by the converter package. |
 | `README.md`, `packages/converter/README.md` | Deployment policies, CLI usage, capabilities, requirements, and examples. |
 | `.github/workflows/ci.yml`, `publish-converter.yml` | Approved quality and separate release changes only. |
@@ -139,12 +127,8 @@ export type ActivationRequirements = {
   requiredHostControls: string[];
   scope: SourceScope;
   disableAllHooks: boolean;
-  ownership: {
-    protocol: 1;
-    completeHostSnapshotRequired: true;
-    oldBridge: "upgrade-or-disable";
-    originalPiEntrypoints: string[];
-  };
+  deployment: "either-or";
+  originalPiEntrypoints: string[];
 };
 export type CoverageReport = {
   schemaVersion: 1;
@@ -185,7 +169,7 @@ export declare function checkArtifact(
 
 `domains` describes a deliberately restricted reviewable partition, not executable predicates. Initially accept only whole domains or provably disjoint exact matcher sets with identical scope whose union equals a finite original matcher set. Regex algebra, arbitrary callbacks, and overlapping/unbounded partitions remain unresolved. This is conservative handling of uncertainty, not silently partial coverage.
 
-`deployment` defaults to `standalone`; only the automatic adapter requests `automatic`, not a user-supplied coverage record. Activation capability/control identifiers are validated against the selected profile. The report records required extension enablement, trust, scope and (for automatic mode) source/provider controls, but runtime rechecks their actual state. `originalPiEntrypoints` are contained source-relative identities resolved against the host-selected plugin instance, not serialized absolute paths. Metadata never grants authorization or overrides an input disable directive.
+`deployment` in `AnalysisOptions` defaults to `standalone`; only the automatic adapter requests `automatic`, not a user-supplied coverage record. Activation capability/control identifiers are validated against the selected profile. Runtime checks its own required extension enablement, trust and scope controls, with automatic source/provider policy retained in the root adapter. `activation.deployment` records the either-or operational requirement. `originalPiEntrypoints` are contained source-relative paths for migration guidance, not live roster identities or proof those bindings are disabled. Metadata never grants authorization or overrides an input disable directive.
 
 `InventoryDeclaration.raw` is internal analysis data, never part of `CoverageReport`. Serialize report declarations with an explicit allowlist of `locator`, `event`, `order`, `scope`, `fields`, and `fingerprint`; never use object spreading or generic JSON serialization of an inventory declaration. Field descriptors contain relative pointers, validated JSON value types, and hashes, not original values. Unknown/sensitive values must not leak through diagnostics or draft text either. Retain full original values only in memory for analysis and authorized source-backed review; resource/code emission remains subject to the specification's separate safe-selection rules.
 
@@ -204,26 +188,13 @@ export declare function registerHooks(
 ): { dispose(): void };
 ```
 
-Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends this runtime registration with its concrete ownership input only after that host contract exists. The policy seam does not claim to solve activation. It removes the existing hard dependency from `createHookContext` to root `loadSettings`. Root retains the latest `LoadedSettings` in its own closure for doctor output. Generated policy returns only artifact settings after target/scope/ownership checks.
+The policy seam removes the existing hard dependency from `createHookContext` to root `loadSettings`. Root retains the latest `LoadedSettings` in its own closure for doctor output. Generated policy returns only artifact settings after its own target/scope/coverage checks. Neither policy queries other extensions, changes their enable state, or participates in an ownership handshake.
 
 ## Ordered tasks
 
-### Task 1: Prove the separately approved host activation seam
+### Task 1: Deliver offline, complete source inspection
 
-**Depends on:** G0 approval and a landed, pinned host implementation. **Files:** create `packages/converter/test/host-activation.test.ts`; host changes belong to the separate OMP proposal, not this repository.
-
-**Consumes:** approved public host snapshot API. **Produces:** an exercised target identity and public adapter contract, recorded in `capabilities.ts` by Task 2. No further implementation starts until this passes.
-
-- [ ] Obtain user approval of the separate host proposal, then record its actual API and pinned revision here. Do not proceed with the currently missing API.
-- [ ] Reuse `bindPreparedExtensions`, `ExtensionRunner`, `SessionManager.inMemory`, and temporary `AuthStorage`/`ModelRegistry` to run real extension factories without network/model calls. Observe the proposed snapshot through the **extension's public surface**, not the runner's private fields.
-- [ ] Cover successful, missing, throwing-before-registration, partially initialized, delayed, inline, preloaded, reload, subagent, and shared-bus sessions. Require complete selected identities and outcomes, and assert that generation invalidation precedes new dispatch eligibility.
-- [ ] Verify separately configured original pi paths appear in the selected roster; verify project/local installation scope is available and cannot be inferred solely from cwd.
-- [ ] Run `bun test packages/converter/test/host-activation.test.ts` on the pinned integration checkout/dependency configuration. Expected: all scenarios pass against the real host. Current revision is expected to fail the prerequisite, not pass through mocks.
-- [ ] Commit the focused host-contract test and updated target evidence only when the prerequisite is real. Stop and return to the host proposal if any required evidence remains unavailable.
-
-### Task 2: Deliver offline, complete source inspection
-
-**Depends on:** Task 1, parser dependency approval. **Files:** converter package/tsconfig, root workspace/scripts/lockfile, `contracts.ts`, `source.ts`, `paths.ts`, `claude-contract.json`, `capabilities.ts`, `index.ts`, `cli.ts`; `test/source.test.ts` under converter.
+**Depends on:** user approval of the revised plan and parser dependency proposal. **Files:** converter package/tsconfig, root workspace/scripts/lockfile, `contracts.ts`, `source.ts`, `paths.ts`, `claude-contract.json`, `capabilities.ts`, `index.ts`, `cli.ts`; `test/source.test.ts` under converter.
 
 **Consumes:** `SourceInput`, `AnalysisOptions`. **Produces:** `inspectSource`; working `inspect` CLI and versioned source/target tables. This is a usable vertical slice, not an empty package scaffold.
 
@@ -232,16 +203,17 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 - [ ] Assert inventory retains every valid declaration and original provenance/order/scope; malformed structure returns exit `1`; unknown well-formed contracts remain visible with exit `2`; the sentinel is absent. Run `bun test packages/converter/test/source.test.ts` before implementing inspection and record the failure.
 - [ ] Capture the approved Claude reference into the checked-in snapshot during development. Record every documented event, handler type, field, input, scope, output effect, and async/lifecycle rule. Verify its identifier/digest. Live documentation is never read by the shipped CLI.
 - [ ] For every snapshot event/type combination, assess the real target contract. Implement all fully supported mappings, not merely the nine legacy events. Represent missing target semantics separately from unfinished conversion support. Preserve unknown source keys outside the snapshot.
+- [ ] Verify each proposed OMP mapping against the pinned host's public events, effects, scope/trust controls, and lifecycle behavior. Use real host loaders/runners for focused smoke scenarios without model/network calls. Do not infer that the package version alone proves support, and do not require an extension roster or propose an ownership API.
 - [ ] Parse explicit JSON/frontmatter using data parsers only. Enumerate manifest/default/referenced files with stable sorted traversal, root-relative locators and exact JSON pointers/frontmatter positions. Reject lexical/symlink escapes before reading. Do not call ambient OMP discovery or an importer to find declarations.
 - [ ] Implement argument handling with `node:util.parseArgs`; require explicit `--scope` for both plugin and file input, additionally enforce file input root and valid conversion names, and reject unknown targets. A missing plugin scope is invalid input, not an inferred user scope. `check` reuses recorded scope/name. JSON and human output derive from one analysis object. Operational/validation exceptions are presented as exit `1`, never as `target-gap`.
 - [ ] Add workspace membership and an independent converter bin/exports map. Keep OMP value imports out of the analysis/CLI entry graph; type-only OMP imports are erased. Typecheck both packages and emit the converter's distributable CLI/library/declarations. Do not add a direct dependency on the host's discovery barrel.
 - [ ] Run the focused test and invoke `bun packages/converter/src/cli.ts inspect <temporary-plugin> --scope project --json` with network disabled. Expected: full inventory, explicit source/target identities, no source execution or mutation. Commit the working inspection slice.
 
-### Task 3: Bind coverage to source and dependency freshness
+### Task 2: Bind coverage to source and dependency freshness
 
-**Depends on:** Task 2. **Files:** `fingerprints.ts`, `pi-analysis.ts`, `coverage.ts`, `contracts.ts`, `test/coverage.test.ts` under converter.
+**Depends on:** Task 1. **Files:** `fingerprints.ts`, `pi-analysis.ts`, `coverage.ts`, `contracts.ts`, `test/coverage.test.ts` under converter.
 
-**Consumes:** `Declaration[]`, explicit source roots, optional coverage report. **Produces:** validated `CoverageDecision[]`, candidate pi relationships, and closure digests used by inspection/generation/checking.
+**Consumes:** `InventoryDeclaration[]`, explicit source roots, optional coverage report. **Produces:** validated `CoverageDecision[]`, candidate pi relationships, and closure digests used by inspection/generation/checking.
 
 - [ ] Write a regression where pi implements one source declaration, a second Claude declaration is absent from pi, and an unrelated pi command shares a handler/module. Expected: both source declarations remain accounted for; only reviewed correspondence selects pi; the unrelated command is retained.
 - [ ] Add stale-evidence cases for script/resource/local import, package version/manifest/lock integrity, mutable workspace dependency, and edited native output. Moving identical source bytes alone must not invalidate coverage. Missing dynamic/unfrozen dependencies remain `needs-review`.
@@ -251,9 +223,9 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 - [ ] Select whole declarations or the restricted proven partitions described above. Support many-to-many source/binding correspondence. Do not suppress an entire event or extension because one command/string matches. A mixed unrelated/hook handler remains unresolved unless a reviewed artifact safely preserves its unrelated functionality.
 - [ ] Run the test, then inspect a temporary plugin before and after each dependency edit. Expected: only affected decisions lose freshness; relocation alone preserves it. Commit this selection slice.
 
-### Task 4: Move execution into the converter without changing automatic policy
+### Task 3: Move execution into the converter without changing automatic policy
 
-**Depends on:** Task 3. **Files:** source-to-runtime moves in the ownership map; root `config.ts`, `omp-hooks.ts`, `doctor.ts`; moved executor/output/tool/prompt/stop tests and retained root integration tests.
+**Depends on:** Task 2. **Files:** source-to-runtime moves in the ownership map; root `config.ts`, `omp-hooks.ts`, `doctor.ts`; moved executor/output/tool/prompt/stop tests and retained root integration tests.
 
 **Consumes:** existing `SettingsFile`, trigger/result contracts, `RuntimePolicy`. **Produces:** one shared OMP runtime; root imports converter and retains automatic source selection.
 
@@ -264,9 +236,9 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 - [ ] Move pure execution tests into converter tests and update import paths; retain root consumer integration tests. Do not duplicate the test corpus or rewrite behavioral assertions into source-text/import assertions.
 - [ ] Run moved tests and retained root regressions. Expected: same observable policy, stdout/JSON effects, timeouts, environment isolation, first-turn delivery, compaction ordering, and stop behavior. Commit the atomic clean cutover.
 
-### Task 5: Make context delivery and disposal session-local
+### Task 4: Make context delivery and disposal session-local
 
-**Depends on:** Task 4. **Files:** `runtime/context.ts`, runtime prompt/compact/session registration modules; `test/hook-context.test.ts`, `test/compact-context.test.ts`, `test/first-turn-context.test.ts`.
+**Depends on:** Task 3. **Files:** `runtime/context.ts`, runtime prompt/compact/session registration modules; `test/hook-context.test.ts`, `test/compact-context.test.ts`, `test/first-turn-context.test.ts`.
 
 **Consumes:** `RuntimePolicy`; existing per-factory pending prompt and stop-loop state. **Produces:** per-session delivery queue/dedup/reset/disposal, with no module-global buffer or content set.
 
@@ -277,53 +249,44 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 - [ ] Preserve prompt-to-before-agent-start handoff, compaction reset before SessionStart reinjection, and existing per-instance stop-loop state. Do not convert those already-local fields into globals.
 - [ ] Run the focused tests and a two-session real-host scenario. Expected: independent identical messages, no cross-session/superseded-generation delivery, and unchanged first-turn/compaction behavior. Commit the isolation fix.
 
-### Task 6: Seal ownership before any managed dispatch
+### Task 5: Emit deterministic complete packages and inert drafts
 
-**Depends on:** Tasks 1 and 5. **Files:** `runtime/ownership.ts`, `runtime/index.ts`, `runtime/context.ts`, `test/ownership.test.ts`, root `src/omp-hooks.ts`.
-
-**Consumes:** the actual approved host snapshot bridge, current coverage claims, public event bus. **Produces:** one deterministic owner map per host session/generation; blocked or approved dispatch, never guessed ownership.
-
-- [ ] Build two independently bundled runtime copies and attach them to the real host bus. Register generated and automatic factories in both orders, then release two first-dispatch calls concurrently through a barrier. Assert both bundles use the same request/owner decision and duplicate queries do not restart the deadline. Count external observable effects for repeated events and identical hooks in separate plugin instances.
-- [ ] Add missing/delayed/throwing/partially initialized generated factories, two generated claimants, old protocol, no response, different roster/seal digest, late registration, original pi overlap, shared bus sessions, reload, and disposal. Inject malformed payloads, unselected participant identities, and replayed session/generation/request packets through a separate bus listener; assert rejection cannot enable managed dispatch. The shared bus is not an authentication boundary against arbitrary same-process code impersonating a valid participant. Run `bun test packages/converter/test/ownership.test.ts` before protocol implementation.
-- [ ] Register control listeners before async preparation (the local Prepare stage, not a packet); keep hooks inert. Implement the `query`, `state`, `seal`, `ack`, and `invalidate` packets with the exact spec envelope. Validate host identities and session/generation/request on every packet; send explicit responses because `emit` does not await async callbacks.
-- [ ] Derive `requestId` from the exact SHA-256/UTF-8 JSON tuple in the specification. Coalesce concurrent queries for the host session/generation/roster into one pending decision in each bundle. Reply idempotently with current state/ack; reject a roster inconsistent with the host snapshot and never reset the query-to-ack deadline on duplicate queries.
-- [ ] Derive claims from originating plugin instance/scope plus declaration and implementation fingerprints, not display names or text. Compute owner maps and digests with stable sorting. Generated wins only for validated overlapping coverage; multiple generated owners conflict. Automatic fallback requires every overlapping replacement confirmed unavailable, including callback safety.
-- [ ] Treat an old bridge, independently active original pi binding, missing host data, unknown partial state, protocol mismatch, timeout, or disagreement as a visible activation conflict. Do not choose a winner by registration order or fall back after the 1,000ms deadline.
-- [ ] Invalidate new dispatch eligibility before accepting a changed generation. Cancel deadlines, unsubscribe listeners, and reject stale packets after disposal. Runtime session tokens never enter generated reports.
-- [ ] Run both bundle orders through actual host dispatch. Expected: one observable execution per applicable behavior; uncertain conflicts execute no converter-managed conflicting callback; confirmed unavailable generated owners permit automatic fallback. Commit only after the real-host scenarios pass.
-
-### Task 7: Emit deterministic complete packages and inert drafts
-
-**Depends on:** Tasks 3 and 6. **Files:** `artifact.ts`, `cli.ts`, `capabilities.ts`, `test/artifact.test.ts`, converter build configuration.
+**Depends on:** Tasks 2 and 4. **Files:** `artifact.ts`, `cli.ts`, `capabilities.ts`, `test/artifact.test.ts`, converter build configuration.
 
 **Consumes:** `Analysis`, fresh coverage decisions, shared runtime. **Produces:** `planArtifact`, working conversion materialization content, runtime target/scope checks.
 
 - [ ] Add fixtures for Claude-only command behavior, reviewed pi plus Claude-only behavior, unrelated pi tools/skills/commands, file-input scope/disable/cwd, embedded absolute source paths, and excluded required resources. Load the actual generated entrypoint in OMP, dispatch both the pi-covered and Claude-only events, and assert one distinct external marker for each behavior per occurrence. Invoke the retained tool and command and observe their effects once; resolve and activate the retained skill through the real host path and observe its expected prompt content. Exercise retained lifecycle state across two events. Coverage-report assertions or manifest keys alone do not satisfy these comparisons.
 - [ ] Run `bun test packages/converter/test/artifact.test.ts` before generation. Expected initial failure includes complete-versus-draft classification and relocation behavior.
 - [ ] Build complete ESM artifacts with `omp.extensions`, bundled runtime, TS bindings, required original resources, and `omp-hook-coverage.json`. Carry over the full required pi resource declaration set because `omp` replaces `pi` as a whole. Reconcile existing OMP bindings explicitly; never overwrite or duplicate them implicitly.
+- [ ] Emit the either-or installation requirement and known original pi entrypoints as migration guidance. Conversion does not edit OMP/Claude activation settings; `check` validates artifact requirements, not live installation state. Preserve specific target/scope/trust failures rather than treating every conversion as blocked on unavailable roster information.
+- [ ] Use a fixture with one declared pi entrypoint whose behavior is incorporated into the output and an unrelated retained resource. Verify JSON and human migration output identify that exact original entrypoint for disabling without marking the unrelated resource as a conflicting implementation. This proves useful installation guidance, not live configuration detection.
 - [ ] Bundle only reviewed/selected code using Bun without invoking source modules or arbitrary build plugins. Inspect the emitted import/resource closure. Report external interpreters/tools/services/packages; unresolved dynamic closure prevents a complete artifact. Preserve command strings and pass root/data variables through the environment.
 - [ ] For file inputs create the explicit valid name, version `0.0.0`, `private: true`, and ESM manifest, without inferred pi resources. Preserve `disableAllHooks` and installation scope. Keep project-relative commands relative to active project cwd, not `.claude/` or artifact root.
 - [ ] Produce only report and inert `.txt` source for unresolved output: no package manifest, recognized entrypoint, or runnable source tree. `check` of that draft stays exit `2`. A complete result requires every active source requirement and unrelated retained behavior accounted for.
 - [ ] Sort files, report arrays, and stable JSON keys; exclude timestamps and development paths. Fingerprint output resources/bindings, excluding report self-hashing. Review any source-root absolute reference instead of blindly replacing strings.
-- [ ] Convert a temporary plugin twice and compare every file byte. Move complete output, make the original root unavailable, and exercise the actual generated entrypoint without the bridge installed. Expected: original supported effects retained. Commit deterministic generation.
+- [ ] Convert a temporary plugin twice and compare every file byte. Move complete output, make the original root unavailable, and exercise the actual generated entrypoint without the bridge installed. Expected: original supported effects retained.
+- [ ] Exercise one source through the automatic bridge alone, disable it through existing controls, reload/restart, then exercise the generated replacement alone with the same inputs. Observe the same effect once per occurrence in each configuration, without any bus handshake. Use two independent source plugins with identical command text to confirm they remain independent.
+- [ ] In a separate smoke scenario, make the generated package fail its own initialization validation. Observe the real error, no execution from the disabled original, and unchanged activation settings. Explicitly disable the replacement, reload/restart, and restore the original; verify behavior returns only after that operator action. Do not implement fallback or replay to satisfy the scenario.
+- [ ] Commit deterministic generation after the standalone, explicit-switching, and rollback smoke scenarios pass.
 
-### Task 8: Publish without clobbering and check without executing
+### Task 6: Publish without clobbering and check without executing
 
-**Depends on:** Task 7 and Linux publication boundary approval. **Files:** `publish.ts`, `artifact.ts`, `cli.ts`, `test/publication.test.ts`, `test/check.test.ts` under converter.
+**Depends on:** Task 5 and Linux publication boundary approval. **Files:** `publish.ts`, `artifact.ts`, `cli.ts`, `test/publication.test.ts`, `test/check.test.ts` under converter.
 
 **Consumes:** `ArtifactPlan`, explicit destination/source/report roots. **Produces:** `publishArtifact`, `checkArtifact`, complete `inspect`/`convert`/`check` exit contract.
 
 - [ ] Write regression cases for existing empty/nonempty destinations, symlink/lexical escapes, destination inside source, colliding generated paths, competing converters, another writer appearing immediately before publication, and injected write/validation/publication errors. Assert target content is unchanged, not merely that an exception occurred.
 - [ ] Add `check` cases for malformed artifacts (exit `1`), valid unresolved drafts (exit `2`), fresh complete artifacts (exit `0`), stale source/native/dependency evidence, and an explicit target override. Sentinel code must never execute.
+- [ ] Run `check` on the same complete artifact/source under two isolated OMP configurations: one lists the overlapping original pi entrypoint as enabled, the other disables it. Require the same exit code and analysis report in both, with both configurations unchanged. Success means artifact validity only; neither result certifies live installation safety. This regression must fail if future code consults ambient enablement to decide an offline check result.
 - [ ] Run `bun test packages/converter/test/publication.test.ts packages/converter/test/check.test.ts` and record failure before implementing publication/checking.
 - [ ] Resolve and validate the destination parent, hold a destination-specific exclusive sibling lock, and create a sibling staging directory. Materialize only contained paths, then validate the full staged artifact before publication. A stale lock is reported, never automatically broken using a guessed PID.
 - [ ] On approved Linux targets call libc `renameat2` with `RENAME_NOREPLACE` through Bun FFI. Treat `EEXIST` as rejection and unsupported flags/filesystems as operational failure. Never use plain `rename` after an existence check: another writer can create an empty directory in that gap. Always release owned locks and remove owned staging data; report residual paths when cleanup fails.
 - [ ] Implement `checkArtifact` by validating report/schema/paths, re-running source analysis under the recorded scope/name/profile, recomputing closure/evidence fingerprints, and comparing required artifact files. It does not import either implementation or upgrade scenario evidence into proof of equivalence.
 - [ ] Run the regressions, race two actual CLI processes for one destination, inject an independent destination writer, and verify drafts through OMP's real discovery functions. Expected: at most one published package; no overwritten writer content; exit-2 output has no discoverable package/extension. Commit safe publication/checking.
 
-### Task 9: Ship the optional skill and record one real native port
+### Task 7: Ship the optional skill and record one real native port
 
-**Depends on:** Task 8. **Files:** `skills/convert-claude-hooks/SKILL.md`, converter `package.json`, converter `README.md`; one small fixture/comparison under `packages/converter/test/native-port/` with source, native implementation, and recorded scenario evidence.
+**Depends on:** Task 6. **Files:** `skills/convert-claude-hooks/SKILL.md`, converter `package.json`, converter `README.md`; one small fixture/comparison under `packages/converter/test/native-port/` with source, native implementation, and recorded scenario evidence.
 
 **Consumes:** shipped CLI and coverage schema. **Produces:** a discoverable optional skill and source-bound behavioral evidence for AC-12.
 
@@ -334,13 +297,13 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 - [ ] Run the retained comparison and deterministic `check`. Expected: scenario evidence is current; edits to either implementation invalidate it. No claim of arbitrary-program equivalence. Remove unused generated script adapters only after all selected behavior is native; retain provenance and evidence.
 - [ ] Include the skill in converter package files/OMP skill declarations and document its invocation. Commit skill and the one meaningful deny/allow comparison, not a second framework.
 
-### Task 10: Verify independent packaging, compatibility, and release gates
+### Task 8: Verify independent packaging, compatibility, and release gates
 
-**Depends on:** Task 9 and CI approval. **Files:** root/converter package manifests and scripts, `README.md`, converter `README.md`, `.github/workflows/ci.yml`, `.github/workflows/publish-converter.yml`; existing root publish workflow only if its dependency ordering needs enforcement.
+**Depends on:** Task 7 and CI approval. **Files:** root/converter package manifests and scripts, `README.md`, converter `README.md`, `.github/workflows/ci.yml`, `.github/workflows/publish-converter.yml`; existing root publish workflow only if its dependency ordering needs enforcement.
 
 **Consumes:** complete converter and migrated root. **Produces:** independently installable packages, documented policies, quality/release gates with no implicit publication.
 
-- [ ] Document CLI examples, exit codes, coverage limitations, target revision/capabilities, Linux publication boundary, external runtime requirements, disabled/file-input scope behavior, and the automatic-versus-standalone policy distinction. State that old bridges must be upgraded or disabled for coexistence.
+- [ ] Document CLI examples, exit codes, coverage limitations, target revision/capabilities, Linux publication boundary, external runtime requirements, disabled/file-input scope behavior, and the automatic-versus-standalone policy distinction. Give explicit disable/reload/enable and rollback instructions. State that overlapping deployments are unsupported regardless of bridge version and that offline success does not prove a conflict-free installation.
 - [ ] Pack the converter into a temporary archive, install it offline in an isolated temporary project using available dependency artifacts, and exercise the installed bin/library. Pack the root with a real publishable converter dependency, not an unresolved workspace-only reference. Verify a generated artifact needs neither installed package at runtime. If local dependency artifacts are unavailable, report that verification as blocked rather than pretending an install occurred.
 - [ ] Extend root typecheck/build to both packages and ensure moved plus retained tests are discovered. PR CI runs `bun test`, `bun run typecheck`, `bun run build`; it must not lower assertions, suppress types, or skip existing behavior tests.
 - [ ] Add a converter-specific tag/release trigger (`converter-v*`) that checks its manifest version and runs quality gates before publishing from `packages/converter`. Keep root `v*` releases separate. Publish the converter version before any root release depending on it; never publish during smoke verification.
@@ -351,20 +314,18 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 ## Dependency order and review checkpoints
 
 ```text
-Host proposal approval + actual host implementation
-    -> Task 1 (real activation proof; hard stop if unavailable)
-    -> Task 2 (independent offline inspect)
-    -> Task 3 (fresh coverage and pi reconciliation)
-    -> Task 4 (shared runtime clean cutover)
-    -> Task 5 (session-local delivery)
-    -> Task 6 (real-host ownership)
-    -> Task 7 (complete packages / inert drafts)
-    -> Task 8 (safe publication + check)
-    -> Task 9 (skill + native behavioral comparison)
-    -> Task 10 (packaging, quality, release readiness)
+Plan approval and the affected dependency proposal
+    -> Task 1 (independent offline inspect and target assessment)
+    -> Task 2 (fresh coverage and pi reconciliation)
+    -> Task 3 (shared runtime clean cutover)
+    -> Task 4 (session-local delivery)
+    -> Task 5 (complete packages, either-or deployment, inert drafts)
+    -> Task 6 (safe publication and check; platform approval required)
+    -> Task 7 (skill and native behavioral comparison)
+    -> Task 8 (packaging and release readiness; CI approval required)
 ```
 
-Checkpoint A: Task 1 proves the prerequisite; no broader implementation before it. Checkpoint B: Tasks 2–3 inspect and select without executing source. Checkpoint C: Tasks 4–6 preserve root behavior and prove coexistence. Checkpoint D: Tasks 7–10 satisfy all acceptance conditions and independently installable packaging.
+Checkpoint A: Tasks 1–2 inspect and select without executing source. Checkpoint B: Tasks 3–4 preserve root policy and isolate runtime state. Checkpoint C: Tasks 5–6 prove standalone behavior, explicit switching/rollback, and safe artifacts. Checkpoint D: Tasks 7–8 satisfy the native-port comparison and independent packaging/release requirements. There is no host ownership-API checkpoint.
 
 One integration owner controls shared contracts and clean-cutover files. Do not parallelize dependent implementations. Once a task's interface is fixed, independent fixture/research slices may run concurrently without sharing edited files; run project-wide validation only after edits settle.
 
@@ -372,24 +333,24 @@ One integration owner controls shared contracts and clean-cutover files. Do not 
 
 | Criterion | Owning tasks | Smallest meaningful proof |
 | --- | --- | --- |
-| AC-01 | 7, 10 | Execute relocated generated entrypoint with source unavailable and no bridge. |
-| AC-02 | 3, 7 | Actual generated entrypoint receives both events; pi-derived and Claude-adapted behavior each writes its expected marker once. |
-| AC-03 | 1, 6 | Two independently bundled runtimes, both registration orders, count one effect per occurrence. |
-| AC-04 | 1, 6 | Explicit original pi selection appears in host snapshot and blocks conflicting managed dispatch. |
-| AC-05 | 3, 8 | Source/resource/native/dependency edits invalidate evidence; pure relocation does not. |
-| AC-06 | 1, 6 | Confirmed inert failure permits fallback; unknown partial registration and silence do not. |
-| AC-07 | 3, 7 | Invoke retained tool/command, activate the skill through the host, and observe lifecycle state after whole-manifest replacement. |
-| AC-08 | 2, 3 | Unknown/malformed/gap/unimplemented/dynamic dependency cases retain distinct outcomes. |
-| AC-09 | 2, 3, 8 | Execution sentinels stay absent; escape/copy/output attacks reject without source changes. |
-| AC-10 | 7, 8 | Byte comparison, concurrent publication, failure injection, real-host draft nondiscovery. |
-| AC-11 | 5, 6 | Two sessions/subagents/shared bus/reload, independent identical messages and repeated effects. |
-| AC-12 | 9 | Original/native deny prevents actual tool execution; allowed case executes in both. |
-| AC-13 | 4, 5, 10 | Existing trust/disable/environment/context/compaction/stop behavior tests remain green. |
-| AC-14 | 2, 3, 7 | Full snapshot and unknown-key inventory assessed independently of pi, with contract-level rules. |
-| AC-15 | 2, 7, 8 | Explicit file identity/root/scope, real project-relative command cwd, disable and scope enforcement. |
+| AC-01 | 5, 8 | Execute relocated generated entrypoint with source unavailable and no bridge. |
+| AC-02 | 2, 5 | Actual generated entrypoint receives both events; pi-derived and Claude-adapted behavior each writes its expected marker once. |
+| AC-03 | 5 | Run automatic-only, disable/reload, then generated-only; compare one effect per occurrence in each configuration. |
+| AC-04 | 5, 6, 8 | Known original pi paths appear in migration guidance; activation settings stay untouched and offline check claims only artifact validity. |
+| AC-05 | 2, 6 | Source/resource/native/dependency edits invalidate evidence; pure relocation does not. |
+| AC-06 | 5 | Initialization failure reports an error without enabling originals; explicit disable/reload/restore returns original behavior. |
+| AC-07 | 2, 5 | Invoke retained tool/command, activate the skill through the host, and observe lifecycle state after whole-manifest replacement. |
+| AC-08 | 1, 2 | Unknown/malformed/gap/unimplemented/dynamic dependency cases retain distinct outcomes. |
+| AC-09 | 1, 2, 6 | Execution sentinels stay absent; escape/copy/output attacks reject without source changes. |
+| AC-10 | 5, 6 | Byte comparison, concurrent publication, failure injection, real-host draft nondiscovery. |
+| AC-11 | 4, 5 | Concurrent sessions/subagents/reload deliver identical messages independently; independent plugins and repeated occurrences still execute. |
+| AC-12 | 7 | Original/native deny prevents actual tool execution; allowed case executes in both. |
+| AC-13 | 3, 4, 8 | Existing trust/disable/environment/context/compaction/stop behavior tests remain green. |
+| AC-14 | 1, 2, 5 | Full snapshot and unknown-key inventory assessed independently of pi, with contract-level rules. |
+| AC-15 | 1, 5, 6 | Explicit file identity/root/scope, real project-relative command cwd, disable and scope enforcement. |
 
 ## Planning verification and handoff
 
-This plan changes documentation only. The host-surface probe above was executed; converter commands, package tests, new host APIs, and implementation outcomes described in the tasks are future acceptance work, not present successes.
+This revision changes documentation only. Earlier real-host probes established manifest selection and the absence of a complete activation snapshot; the latter is no longer a prerequisite under the user's either-or decision. Converter commands, package tests, and implementation outcomes described in the tasks remain future acceptance work.
 
-Before execution, obtain user review of this plan and explicit decisions on G0/G1. A rejected or unavailable prerequisite requires revising the dependent proposal, not declaring the approved converter complete with safe coexistence removed. No implementation begins merely because this plan is committed or its documentation PR passes CI.
+Before execution, obtain user review of this revised plan and explicit decisions on the remaining dependency, publication-platform, and CI proposals. The user-authorized change replaces the former simultaneous-coexistence acceptance criteria with explicit deployment/switching/rollback criteria; it does not weaken coverage, filesystem safety, scope/trust controls, or session isolation. No implementation begins merely because this plan is committed or its documentation PR passes CI.
