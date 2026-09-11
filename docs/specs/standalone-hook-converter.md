@@ -60,9 +60,12 @@ The following commands are the proposed public interface, not commands already i
 omp-hook-converter inspect ./plugin --json
 omp-hook-converter convert ./plugin --out ./converted-plugin
 omp-hook-converter check ./converted-plugin --source ./plugin --json
+omp-hook-converter convert ./.claude/settings.json --source-root . --scope project --name my-project-hooks --out ../converted-project-hooks
 ```
 
-Each source argument can name a plugin directory or a Claude hook/settings JSON file. The containing directory is the source root for a file input. All referenced files remain subject to source-root containment checks.
+Each source argument can name a plugin directory or a Claude hook/settings JSON file. File-input inspection/conversion requires `--source-root <directory>` and `--scope user|project|local`; file-input conversion also requires `--name <valid-package-name>`. The JSON file must be inside that explicit source root. These inputs avoid guessing that `.claude/` is the project working directory or deriving package identity from an absolute path. `check` retains the recorded scope/name and accepts `--source-root` when validating relocated file sources.
+
+The source root defines analysis/resource containment, not runtime working directory. Hook commands still run in the active OMP project directory. Classify relative command/resource paths by their original contract: project-relative paths remain project-relative; bundled plugin resources resolve under the generated package root. A resource relocation that cannot be established without changing behavior is `needs-review`, not a reason to change the hook's working directory silently.
 
 `inspect` and `convert` accept `--coverage <report>` to reuse reviewed decisions from an earlier artifact. Validate that report, its source fingerprints, and its referenced binding/resource files before reuse; bind artifact-relative paths to the report's directory and enforce containment there independently of the source root. Stale decisions return to `needs-review`. A coverage file is user-supplied evidence, not permission to execute its code or proof that its behavioral claims are true.
 
@@ -81,6 +84,8 @@ All commands accept `--target <profile>` to select a bundled OMP capability prof
 Give each declaration a stable source locator consisting of source kind, source-root-relative file, and JSON pointer or frontmatter location. Retain the original event, matcher, handler fields, declaration order, and activation scope. Relative source locators are independent of the user's absolute installation directory.
 
 Fingerprint declaration content and the local files on which a coverage decision depends. A correspondence involving pi code includes the relevant TypeScript and local import dependencies; a script-backed decision includes its scripts and known local resources. Unresolved dynamic dependencies remain visible. A declaration locator is not a freshness check or a runtime deduplication key.
+
+For pi/native package imports, include the relevant dependency manifest entries, resolved versions, and lockfile/integrity metadata in the decision fingerprint. Mutable local/workspace dependencies also require fingerprints of the files used by the binding. Missing or unfrozen dependency resolution remains `needs-review`; a package upgrade cannot inherit an old `covered` verdict just because the importing TypeScript file is unchanged.
 
 The report records the converter version, artifact schema version, target OMP capability profile, source locators and fingerprints, selected implementation, evidence for that selection, and diagnostics. Also record generated/native binding and bundled-resource fingerprints so artifact edits invalidate prior verification evidence. The skill can update a decision after verification; it cannot preserve the old evidence as current merely by changing a checksum.
 
@@ -157,11 +162,13 @@ A complete plugin conversion produces:
 - Original scripts and required local resources with a relocatable relative layout.
 - `omp-hook-coverage.json`, containing coverage, fingerprints, target information, activation requirements, and evidence references.
 
+A complete file-input conversion produces the same runtime/report structure, with a new ESM package manifest using the explicit `--name`, version `0.0.0`, `private: true`, and its generated OMP entrypoint. It has no inferred pi resource declarations. Record the selected source scope and retain file-level disable directives: `disableAllHooks: true` yields a disabled artifact, not active hooks. Project/local artifacts require project-scoped activation; user-scoped activation cannot silently widen them.
+
 An `omp` manifest can replace the entire `pi` manifest in OMP's package selection, not merely its extensions field. Carry over required skill and other resource declarations explicitly. Existing OMP bindings are input to reconciliation; do not overwrite or duplicate them implicitly.
 
 Self-contained means no runtime dependency on the installed `omp-hooks-plus` package or the original source directory. It does not eliminate script interpreters, external commands, services, or plugin dependencies. Report those requirements. Dynamic dependency closure that cannot be determined must remain `needs-review`; do not claim portability based on a guessed file list.
 
-Resolve runtime plugin-root environment values from the installed output location. Preserve source command strings and pass environment variables as environment variables, not interpolated shell text. Plugin data belongs in the appropriate writable runtime data location, not the generated package or the original development directory.
+Resolve runtime plugin-root environment values from the installed output location. Preserve source command strings and pass environment variables as environment variables, not interpolated shell text. A command or dependency embedding the original absolute source root is not relocatable: leave it `needs-review` unless an explicit reviewed transformation replaces only a proven resource reference without changing behavior. Do not perform blind textual path replacement. Plugin data belongs in the appropriate writable runtime data location, not the generated package or the original development directory.
 
 Validate manifests, configuration, coverage records, and paths at their input interfaces. Reject lexical and symlink escapes from the source root, unsafe output paths, and conflicting generated file names. Generation must not read ambient user secrets or copy VCS metadata, installed dependency caches, or secret-bearing configuration into output. Required resources excluded for safety are reported as unresolved rather than silently omitted. Resolve these with an explicit reviewed resource selection before claiming a complete package.
 
@@ -195,11 +202,11 @@ Generated artifacts must state that safe coexistence requires the migrated, prot
 
 | ID | Observable acceptance condition |
 | --- | --- |
-| AC-01 | A Claude-only command plugin converts into a relocatable OMP package and exhibits the original supported behavior without `omp-hooks-plus` installed. |
+| AC-01 | A Claude-only command plugin converts into an OMP package that still exhibits the original supported behavior after moving the output and making the original source root unavailable, without `omp-hooks-plus` installed. |
 | AC-02 | A plugin with pi coverage plus a Claude hook absent from pi retains both behaviors, with one selected implementation for each. |
 | AC-03 | Protocol-aware generated bindings and `omp-hooks-plus` produce one execution per applicable source behavior regardless of their registration order. |
 | AC-04 | A separately selected original pi entrypoint that overlaps the generated replacement produces an explicit activation conflict rather than duplicate converter-managed execution. |
-| AC-05 | Changing a declaration, relevant script/resource, or reviewed pi implementation invalidates affected coverage; moving an unchanged plugin does not. |
+| AC-05 | Changing a declaration, relevant script/resource, reviewed pi implementation, or resolved imported dependency invalidates affected coverage; moving an unchanged plugin does not. |
 | AC-06 | Missing/failed generated initialization does not silently suppress the original, and ambiguous partially active replacements do not trigger an unsafe fallback. |
 | AC-07 | Skills, commands, tools, lifecycle state, and other unrelated functionality survive pi-to-OMP manifest/entrypoint replacement. |
 | AC-08 | Unknown and malformed declarations, unavailable target contracts, unimplemented converter support, and unresolved dependencies remain distinguishable; none disappears through the existing nine-event filter. |
@@ -209,6 +216,7 @@ Generated artifacts must state that safe coexistence requires the migrated, prot
 | AC-12 | At least one skill-assisted native port has recorded runnable comparisons for a `PreToolUse` deny case and a corresponding non-denied case: the denied tool does not execute, the non-denied tool does, and both match the original hook's observable outcome. Deterministic checking does not overstate that evidence. |
 | AC-13 | Existing supported `omp-hooks-plus` behavior remains covered by its behavioral tests after the clean cutover, including trust/disable policy, environment isolation, context delivery, compaction, and stop-loop handling. |
 | AC-14 | The event/handler capability table assesses Claude behavior independently of pi coverage, includes all inventoried events/types, and distinguishes true target gaps from missing converter implementation. |
+| AC-15 | File-input conversion uses the explicit package name, source root, and scope; a project-relative script is not misresolved under `.claude/`; command working directory and disable directives are preserved; project/local scope cannot become user-wide implicitly. |
 
 Use the existing Bun test conventions. Keep regression tests for plausible failures in selection, activation, safety, lifecycle behavior, and source freshness. Use temporary end-to-end scenarios for routine generation and CLI proof. Exercise actual generated entrypoints and runtime effects, not only source text or a mocked compiler result.
 
