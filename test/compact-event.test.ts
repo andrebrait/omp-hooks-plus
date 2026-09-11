@@ -1,12 +1,11 @@
 import { afterEach, expect, jest, test } from 'bun:test';
 import type { ExtensionAPI, ExtensionContext } from '@oh-my-pi/pi-coding-agent';
-import { createHookContext, resetInjectedContext } from '../src/hook-context';
+import { createHookContext } from '../src/hook-context';
 import { registerCompactHooks } from '../src/hooks/compact-hooks';
 
-afterEach(() => { jest.useRealTimers(); resetInjectedContext(); });
+afterEach(() => { jest.useRealTimers(); });
 
 test('compaction deduplicates matching hooks and restores distinct instructions each time', async () => {
-  resetInjectedContext();
   jest.useFakeTimers();
   type Handler = (event: { compactionEntry: { summary: string } }, ctx: ExtensionContext) => Promise<void>;
   const handlers = new Map<string, Handler>();
@@ -15,16 +14,14 @@ test('compaction deduplicates matching hooks and restores distinct instructions 
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     sendMessage: (message: { content: string }) => messages.push(message.content),
   } as unknown as ExtensionAPI;
-  const shared = createHookContext(api);
   let postContext = 'Bootstrap instructions.';
-  shared.settingsFor = async () => {
+  const shared = createHookContext(api, async () => {
     const output = JSON.stringify({ hookSpecificOutput: { hookEventName: 'PostCompact', additionalContext: postContext } });
-    shared.currentSettings = { hooks: {
+    return { hooks: {
       PostCompact: [{ hooks: [{ type: 'command', command: `printf '%s' '${output}'` }] }],
       SessionStart: [{ matcher: 'compact', hooks: [{ type: 'command', command: "printf 'Bootstrap instructions.'" }] }],
     } };
-    return shared.currentSettings;
-  };
+  });
   registerCompactHooks(api, shared);
   const ctx = {
     cwd: process.cwd(), sessionManager: { getSessionFile: () => 'compact-event' },
@@ -39,4 +36,5 @@ test('compaction deduplicates matching hooks and restores distinct instructions 
   postContext = 'Post-compact instructions.';
   expect(await compact()).toBe('Post-compact instructions.\n\nBootstrap instructions.');
   expect(await compact()).toBe('Post-compact instructions.\n\nBootstrap instructions.');
+  shared.dispose();
 });

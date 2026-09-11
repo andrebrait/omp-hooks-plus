@@ -34,6 +34,7 @@
   ],
   "scripts": {
     "build": "bun build src/omp-hooks.ts --target=bun --outdir=dist",
+    "convert": "bun src/convert.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run test && bun run typecheck && bun run build"

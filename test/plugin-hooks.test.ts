@@ -10,7 +10,8 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { disableProvider, enableProvider, isProviderEnabled } from "@oh-my-pi/pi-coding-agent/capability";
-import { getHookGroups, loadSettings } from "../src/config";
+import { getHookGroups } from "../src/claude";
+import { loadSettings } from "../src/config";
 import { triggerSessionHooks } from "../src/hooks/session-hooks";
 
 const roots: string[] = [];

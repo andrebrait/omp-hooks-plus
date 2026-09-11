@@ -10,12 +10,11 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { createHookContext, resetInjectedContext } from "../src/hook-context";
+import { createHookContext } from "../src/hook-context";
 import { registerToolHooks } from "../src/hooks/tool-hooks";
 
 for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] as const) {
   test(`${hookEventName} context reaches the next model step in the first user turn`, async () => {
-    resetInjectedContext();
     type Handler = (event: unknown, ctx: ExtensionContext) => Promise<{ block?: boolean; reason?: string } | void>;
     const handlers = new Map<string, Handler>();
     const pending: Promise<unknown>[] = [];
@@ -29,15 +28,14 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
         pending.push(session.sendCustomMessage(message, options));
       },
     } as unknown as ExtensionAPI;
-    const shared = createHookContext(pi);
     const reminder = `Query Graphify before reading source: ${hookEventName}`;
-    shared.settingsFor = async () => ({ hooks: {
+    const shared = createHookContext(pi, async () => ({ hooks: {
       [hookEventName]: [{ matcher: "Bash", hooks: [{
         type: "command", command: `printf '%s' '${JSON.stringify({
           hookSpecificOutput: { hookEventName, additionalContext: reminder },
         })}'`,
       }] }],
-    } });
+    } }));
     registerToolHooks(pi, shared);
     const sessionManager = SessionManager.inMemory();
     const ctx = {
@@ -96,7 +94,7 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       await Promise.all(pending);
       await session.dispose();
       auth.close();
-      resetInjectedContext();
+      shared.dispose();
     }
   });
 }

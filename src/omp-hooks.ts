@@ -1,19 +1,19 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { registerHooks } from "./adapter";
 import { loadSettings } from "./config";
 import { formatDoctorReport } from "./doctor";
-import { createHookContext } from "./hook-context";
-import { registerCompactHooks } from "./hooks/compact-hooks";
-import { registerPromptHooks } from "./hooks/prompt-hooks";
-import { registerSessionHooks } from "./hooks/session-hooks";
-import { registerStopHooks } from "./hooks/stop-hooks";
-import { registerToolHooks } from "./hooks/tool-hooks";
 
 // ============================================================================
 // Extension main entry point
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
-  const shared = createHookContext(pi);
+  registerHooks(pi, async (ctx) => {
+    const loaded = await loadSettings(ctx.cwd, {
+      projectTrusted: ctx.isProjectTrusted(),
+    });
+    return loaded.settings;
+  });
   pi.registerCommand("claude-compat", {
     description: "Show effective Claude hook compatibility settings",
     handler: async (args, ctx) => {
@@ -27,11 +27,4 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify(formatDoctorReport(loaded), "info");
     },
   });
-
-
-  registerSessionHooks(pi, shared);
-  registerCompactHooks(pi, shared);
-  registerPromptHooks(pi, shared);
-  registerStopHooks(pi, shared);
-  registerToolHooks(pi, shared);
 }

@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { resetInjectedContext, type HookModuleContext } from "../hook-context";
+import type { HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   HookRunResult,
@@ -19,6 +19,7 @@ async function triggerCompactHooks(
 
 export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   pi.on("session_before_compact", async (event, ctx) => {
+    const delivery = shared.captureContext();
     const trigger: "manual" | "auto" = "manual";
     const result = await triggerCompactHooks(
       "PreCompact",
@@ -29,22 +30,22 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
         trigger,
         customInstructions: event.customInstructions ?? "",
         transcriptPath: ctx.sessionManager.getSessionFile(),
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
     if (result.additionalContext) {
-      shared.injectHiddenContext(result.additionalContext, {
+      delivery.injectHiddenContext(result.additionalContext, {
         hookEventName: "PreCompact",
       });
     }
   });
 
   pi.on("session_compact", async (event, ctx) => {
-    resetInjectedContext();
+    const delivery = shared.captureContext();
+    shared.resetInjectedContext();
     const trigger: "manual" | "auto" = "manual";
 
     const result = await triggerCompactHooks(
@@ -56,15 +57,15 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
         trigger,
         compactSummary: event.compactionEntry.summary,
         transcriptPath: ctx.sessionManager.getSessionFile(),
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
+    if (!delivery.isActive()) return;
 
     if (result.additionalContext) {
-      shared.injectHiddenContext(result.additionalContext, {
+      delivery.injectHiddenContext(result.additionalContext, {
         hookEventName: "PostCompact",
       });
     }

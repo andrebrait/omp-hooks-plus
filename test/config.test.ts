@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { getHookGroups, loadSettings } from "../src/config";
+import { getHookGroups } from "../src/claude";
+import { loadSettings } from "../src/config";
 
 const roots: string[] = [];
 

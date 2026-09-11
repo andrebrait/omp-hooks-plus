@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { getHookGroups } from "../config";
+import { getHookGroups } from "../claude";
 import { extractTextFromContent } from "../helpers";
 import type { HookModuleContext } from "../hook-context";
 import type {
@@ -98,6 +98,7 @@ export async function triggerStopHooks(
 
 export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   pi.on("agent_end", async (event, ctx) => {
+    const delivery = shared.captureContext();
     const result = await triggerStopHooks(
       {
         sessionId: shared.getSessionId(ctx),
@@ -106,12 +107,12 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         transcriptPath: ctx.sessionManager.getSessionFile(),
         stopHookActive: shared.stopHookActive,
         lastAssistantMessage: findLastAssistantMessageText(event.messages),
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
+    if (!delivery.isActive()) return;
 
     if (result.blocked) {
       if (shared.stopHookActive) {
@@ -146,7 +147,7 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       );
       return;
     } else if (result.additionalContext) {
-      shared.injectHiddenContext(result.additionalContext, {
+      delivery.injectHiddenContext(result.additionalContext, {
         hookEventName: "Stop",
       });
     }

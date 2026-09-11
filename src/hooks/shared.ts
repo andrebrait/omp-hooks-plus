@@ -1,4 +1,4 @@
-import { getHookGroups, matcherMatches, toClaudeToolName } from "../config";
+import { getHookGroups, matcherMatches, toClaudeToolName } from "../claude";
 import { buildHookInput, executeHook, executeHookAsync, getHookTimeoutMs } from "../executor";
 import type {
   Hook,

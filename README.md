@@ -113,6 +113,34 @@ Claude Code's user-plugin registry is opt-in, following OMP's `claude`/`claude-p
 
 The doctor reports these limits rather than implying full parity. OMP's native Claude provider continues to own skill discovery; this package does not copy or reimplement it.
 
+## One-shot conversion
+
+To generate standalone OMP hooks instead of using live discovery, run the converter from a checkout of this repository:
+
+```sh
+bun install --frozen-lockfile
+bun run convert /path/to/claude-plugin --dry-run
+bun run convert /path/to/claude-plugin --out /path/to/new-output
+```
+
+Load `/path/to/new-output/index.ts` as an OMP extension. The generated adapter and resources are self-contained: the converter and this bridge do not need to remain installed. OMP/Bun and the scripts' external executables and dependencies are still required.
+
+For a settings file, no surrounding project files are copied automatically:
+
+```sh
+bun run convert /project/.claude/settings.json \
+  --source-root /project --include scripts \
+  --out /path/to/new-output --json
+```
+
+`--include` may be repeated. Included resources are available through `CLAUDE_PLUGIN_ROOT`; ordinary relative commands retain the active project's working directory. Output must be a new directory outside the source root, and its parent must already exist. Disable overlapping original hooks before enabling generated hooks.
+
+Exit codes: **0** supported, **1** invalid input/operational failure, **2** unsupported declarations or resources. Unsupported input produces a report only, never a partial runnable extension. `--dry-run` writes nothing; `--json` prints the inventory report.
+
+The converter inventories unsupported events, non-command handlers, unknown hook fields, and scoped frontmatter hooks rather than dropping them. Pi bindings and non-hook settings are not migrated. Plugin resources exclude declaration files, package manifests/lockfiles, caches, common credentials, and environment files; symlinks require resolution. Review the reported exclusions and script dependencies before use. Filename exclusions are not a secret scanner, and conversion does not prove arbitrary script dependency closure.
+
+See the [conversion contract](docs/specs/standalone-hook-converter.md) and [implementation notes](docs/plans/standalone-hook-converter.md).
+
 ## Development
 
 ```sh

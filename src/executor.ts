@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { toClaudeToolName } from "./config";
+import { toClaudeToolName } from "./claude";
 import type { Hook, HookExecutionContext } from "./types";
 
 // ============================================================================

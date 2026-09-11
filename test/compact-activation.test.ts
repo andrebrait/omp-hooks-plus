@@ -4,13 +4,11 @@ import { createHookContext } from "../src/hook-context";
 
 test("plugin bootstrap instructions return after every compaction", async () => {
   const injected: string[] = [];
-  const shared = createHookContext({} as ExtensionAPI);
-  shared.settingsFor = (() => {
-    shared.currentSettings = { hooks: { SessionStart: [{ matcher: "compact", hooks: [{
+  const shared = createHookContext({} as ExtensionAPI, async () => ({
+    hooks: { SessionStart: [{ matcher: "compact", hooks: [{
       type: "command", command: "printf 'Follow the skill before acting.'",
-    }] }] } };
-    return shared.currentSettings;
-  }) as unknown as typeof shared.settingsFor;
+    }] }] },
+  }));
   shared.injectHiddenContext = (content) => { injected.push(content); };
   const ctx = {
     cwd: process.cwd(),
