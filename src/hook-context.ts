@@ -51,6 +51,7 @@ export type HookModuleContext = {
     content: string,
     details: Record<string, unknown>,
     triggerTurn?: boolean,
+    delivery?: "nextTurn" | "aside",
   ) => void;
   settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>;
   buildToolResponse: (event: {
@@ -76,14 +77,17 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
       ctx.sessionManager.getSessionFile() ?? "ephemeral",
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
-    injectHiddenContext: (content, details, triggerTurn = false) => {
-      // 50ms debounce — parallel grep/glob calls trigger concurrent sendMessage
-      // calls. Collapses a burst of parallel injections into one combined
-      // sendMessage after the burst settles. Uses deliverAs: "nextTurn" so
-      // context queues for the next turn instead of calling agent.steer(),
-      // which would interrupt in-flight tools with "Skipped due to pending
-      // system advisory" (OMP's stale-guard, agent-loop.ts:2351).
+    injectHiddenContext: (content, details, triggerTurn = false, delivery = "nextTurn") => {
       if (!claimInjectedContext(content)) return;
+      // A tool reminder must arrive before the next model step, without steering
+      // or a debounce timer that can outlive the tool batch.
+      if (delivery === "aside" && !triggerTurn) {
+        shared.pi.sendMessage(
+          { customType: "omp-hooks-plus", content, display: false, details },
+          { deliverAs: "aside" },
+        );
+        return;
+      }
       _injectBuffer.content.push(content);
       if (details) Object.assign(_injectBuffer.details, details);
       clearTimeout(_injectBuffer.timer);

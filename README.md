@@ -97,6 +97,8 @@ Matching handlers are deduplicated by command, arguments, and environment and no
 
 Successful plain-text output never creates a notification. `SessionStart` and `UserPromptSubmit` add it to model context; `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, and `Stop` ignore it. Structured JSON handling and failed-hook diagnostics are unchanged.
 
+Synchronous tool hooks deliver structured `additionalContext` before the next model step in the current user turn, including the first turn. Delivery does not interrupt other tools in the same batch. A `PreToolUse` reminder informs the model after that tool runs; use a deny decision when the hook must prevent execution. Asynchronous hooks retain their deferred delivery behavior.
+
 ## Current limits
 
 The compatibility layer intentionally does not load:
