@@ -7,7 +7,7 @@ OMP already discovers Claude skills, commands, MCP configuration, extensions, an
 ## Install
 
 ```sh
-omp install npm:omp-hooks-plus
+omp install omp-hooks-plus
 ```
 
 For an unreleased branch or commit:
