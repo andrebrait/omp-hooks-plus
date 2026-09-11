@@ -6,6 +6,7 @@ import { registerSessionHooks } from "./hooks/session-hooks";
 import { registerStopHooks } from "./hooks/stop-hooks";
 import { registerToolHooks } from "./hooks/tool-hooks";
 import type { SettingsFile } from "./types";
+export { findProjectRoot } from "./helpers";
 
 export function registerHooks(
   pi: ExtensionAPI,

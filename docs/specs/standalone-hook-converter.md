@@ -10,7 +10,7 @@ Turn explicitly selected Claude command hooks into standalone OMP hook files, us
 - Inventory declared events and handlers before the compatibility parser filters them. Unknown events, handler types, fields, and scoped skill/agent/command frontmatter hooks are reported, not silently discarded or activated globally. Pi declarations are reported independently and are not imported or reused.
 - Reuse `src/adapter.ts` for both live discovery and generated fixed definitions. Preserve the existing bridge's command, matcher, timeout, output, denial, input-update, and lifecycle semantics; this does not claim complete Claude Code parity.
 - Bundle the adapter beside readable `index.ts`, fixed hook definitions, copied resources, and `conversion-report.json`. Generated output needs OMP/Bun and the commands' external dependencies, but not this repository, the converter, or the bridge at runtime.
-- Keep ordinary relative commands relative to the active project. Set `CLAUDE_PROJECT_DIR` to that project, `CLAUDE_PLUGIN_ROOT` to generated resources, and `CLAUDE_PLUGIN_DATA` to a persistent directory under `~/.omp/hook-data/`.
+- Keep ordinary relative commands relative to the active working directory. Set `CLAUDE_PROJECT_DIR` using the live bridge's project-root detection, `CLAUDE_PLUGIN_ROOT` to generated resources, and `CLAUDE_PLUGIN_DATA` to a persistent directory under `~/.omp/hook-data/`, keyed by the source name, definitions, and copied resource content/modes. Changed resources or definitions receive a distinct data directory; moving the generated directory preserves its key.
 - Preserve a source-wide `disableAllHooks` directive. Do not install or enable the output automatically. Operators disable overlapping original hooks before enabling it.
 
 ## Source and resource boundaries
@@ -20,6 +20,10 @@ Plugin input supports inline or referenced manifest hooks, the default `hooks/ho
 Plugin resources are copied without following symlinks. File inputs copy no project tree; repeated `--include` selects source-root-relative resources. Declaration files, package manifests/lockfiles, VCS/cache directories, environment files, and common credential/key filenames are excluded and listed in the report. These exclusions are not a general secret scanner. Review the source and resource inventory before sharing output. Arbitrary script dependency closure is not verified; excluded files and external dependencies may require operator adaptation.
 
 References and output paths must remain within their intended boundaries, including realpath checks. Output must be a new directory outside the source root with an existing parent. Existing destinations are never overwritten. The main entrypoint is published last; a process interruption can leave an incomplete directory without an entrypoint. Ordinary write failures attempt to remove newly created output.
+
+Resource copying opens without following a leaf symlink, verifies the opened file's device/inode against inventory, and streams from that descriptor. Replacing a validated path or parent with another file cannot redirect the copy. Copied bytes are hashed during streaming, without buffering entire files.
+
+Host input/preparation coverage remains OMP's responsibility. The shared adapter consumes genuine `input` and `before_agent_start` events once; it never reconstructs missing RPC/editor dispatch, reruns prompt hooks per provider request, or dispatches synthetic continuations as user input. Hook text remains content, including slash-like text and arguments. After shutdown, SessionEnd commands still execute, but reminders and follow-up turns are suppressed.
 
 ## Result
 

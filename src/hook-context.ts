@@ -74,6 +74,7 @@ export function createHookContext(
       injectBuffer.details = {};
       injectBuffer.timer = undefined;
       injectedThisTurn.clear();
+      shared.firedSessionStartKeys.clear();
       shared.pendingUserPromptContext = undefined;
       shared.stopHookActive = false;
     },

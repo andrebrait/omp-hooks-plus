@@ -1,5 +1,5 @@
 import { afterEach, expect, jest, test } from "bun:test";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { createHookContext, type HookModuleContext } from "../src/hook-context";
 import { registerToolHooks } from "../src/hooks/tool-hooks";
 import { registerPromptHooks } from "../src/hooks/prompt-hooks";
@@ -96,8 +96,7 @@ function pendingHook(eventName: "PreToolUse" | "UserPromptSubmit" | "Stop") {
     on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => handlers.set(name, handler),
     sendMessage: (message: unknown) => messages.push(message),
   } as unknown as ExtensionAPI;
-  let release!: (value: SettingsFile) => void;
-  const settings = new Promise<SettingsFile>(resolve => { release = resolve; });
+  const { promise: settings, resolve: release } = Promise.withResolvers<SettingsFile>();
   const shared = createHookContext(pi, () => settings);
   contexts.push(shared);
   registerToolHooks(pi, shared);
@@ -107,7 +106,7 @@ function pendingHook(eventName: "PreToolUse" | "UserPromptSubmit" | "Stop") {
   return {
     shared, messages,
     run: (event: { type: string; [key: string]: unknown }) => handlers.get(event.type)!(event, ctx),
-    release: () => release({ hooks: { [eventName]: [{ hooks: [{ type: "command", command: "printf 'denied by fixture' >&2; exit 2" }] }] } }),
+    release: () => release({ hooks: { [eventName]: [{ hooks: [{ type: "command", command: `printf '%s' '{"decision":"block","reason":"fixture denial","hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"fixture denial"}}'` }] }] } }),
   };
 }
 
@@ -136,4 +135,23 @@ test("a stale Stop denial cannot schedule a follow-up in the new session", async
   await result;
   expect(race.messages).toEqual([]);
   expect(race.shared.stopHookActive).toBe(false);
+});
+
+test("each ephemeral session receives startup context once after a session reset", async () => {
+  jest.useFakeTimers();
+  const messages: string[] = [];
+  const shared = createHookContext({
+    sendMessage: (message: { content: string }) => messages.push(message.content),
+  } as unknown as ExtensionAPI, async () => ({
+    hooks: { SessionStart: [{ hooks: [{ type: "command", command: "printf 'bootstrap'" }] }] },
+  }));
+  contexts.push(shared);
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } } as unknown as ExtensionContext;
+  await shared.triggerSessionStartHook("startup", ctx);
+  jest.advanceTimersByTime(70);
+  await shared.triggerSessionStartHook("startup", ctx);
+  shared.resetSession();
+  await shared.triggerSessionStartHook("startup", ctx);
+  jest.advanceTimersByTime(70);
+  expect(messages).toEqual(["bootstrap", "bootstrap"]);
 });

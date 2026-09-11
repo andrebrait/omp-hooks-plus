@@ -7,6 +7,7 @@ import {
   type ClaudePluginRoot,
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { HOOK_KEYS, parseHook, parseSettings } from "./claude";
+import { findProjectRoot } from "./helpers";
 import type {
   Hook,
   HookGroup,
@@ -307,24 +308,6 @@ function resolvePluginRoot(
   };
 }
 
-export function findProjectRoot(cwd: string): string {
-  let current = path.resolve(cwd);
-
-  while (true) {
-    if (
-      existsSync(path.join(current, ".git")) ||
-      existsSync(path.join(current, ".agents", "hooks.json")) ||
-      existsSync(path.join(current, ".claude", "settings.json")) ||
-      existsSync(path.join(current, ".claude", "settings.local.json"))
-    ) {
-      return current;
-    }
-
-    const parent = path.dirname(current);
-    if (parent === current) return path.resolve(cwd);
-    current = parent;
-  }
-}
 
 export async function loadSettings(
   cwd: string,

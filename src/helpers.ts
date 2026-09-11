@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+
 // ============================================================================
 // Helper functions: extract information from content
 // ============================================================================
@@ -73,4 +76,22 @@ export function extractResponseFromContent(content: unknown): Record<string, unk
   }
 
   return {};
+}
+export function findProjectRoot(cwd: string): string {
+  let current = path.resolve(cwd);
+
+  while (true) {
+    if (
+      existsSync(path.join(current, ".git")) ||
+      existsSync(path.join(current, ".agents", "hooks.json")) ||
+      existsSync(path.join(current, ".claude", "settings.json")) ||
+      existsSync(path.join(current, ".claude", "settings.local.json"))
+    ) {
+      return current;
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) return path.resolve(cwd);
+    current = parent;
+  }
 }

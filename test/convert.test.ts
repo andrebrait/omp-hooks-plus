@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
@@ -14,11 +15,13 @@ afterEach(() => { for (const root of temporary.splice(0)) rmSync(root, { recursi
 function fixture() {
   const root = mkdtempSync(path.join(tmpdir(), "omp-convert-"));
   temporary.push(root);
+  const projectRoot = path.join(root, "project");
+  const project = path.join(projectRoot, "nested");
   const plugin = path.join(root, "plugin");
-  const project = path.join(root, "project");
   mkdirSync(path.join(plugin, ".claude-plugin"), { recursive: true });
+  mkdirSync(project, { recursive: true });
+  mkdirSync(path.join(projectRoot, ".git"));
   mkdirSync(path.join(plugin, "hooks"));
-  mkdirSync(project);
   writeFileSync(path.join(plugin, ".claude-plugin/plugin.json"), JSON.stringify({ name: "converter-test" }));
   writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/guard.cjs"' }] }] } }));
   writeFileSync(path.join(plugin, "hooks/guard.cjs"), `const fs = require("node:fs");
@@ -53,8 +56,8 @@ test("generated hooks survive relocation and source removal, preserving real hos
     expect((await runner.emitToolCall(event))?.block).not.toBe(true);
     expect(event.input.command).toBe("rewritten");
     expect(readFileSync(path.join(project, "observed.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual([
-      { cwd: project, project, tool: "Bash", command: "deny" },
-      { cwd: project, project, tool: "Bash", command: "allow" },
+      { cwd: project, project: path.dirname(project), tool: "Bash", command: "deny" },
+      { cwd: project, project: path.dirname(project), tool: "Bash", command: "allow" },
     ]);
   } finally {
     await runner.emit({ type: "session_shutdown" });
@@ -107,6 +110,94 @@ test("file conversion copies only selected resources and honors source-wide disa
   try {
     expect((await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "disabled", input: { command: "deny" } }))?.block).not.toBe(true);
     expect(existsSync(path.join(project, "observed.jsonl"))).toBe(false);
+  } finally {
+    await runner.emit({ type: "session_shutdown" });
+    runner.clearManagedTimers();
+    auth.close();
+  }
+});
+
+test("resource parent replacement cannot copy a file outside the inventoried source", async () => {
+  const { root, plugin, out } = fixture();
+  const outside = path.join(root, "outside");
+  mkdirSync(outside);
+  writeFileSync(path.join(outside, "guard.cjs"), "PRIVATE OUTSIDE CONTENT");
+  const copy = fs.copyFileSync;
+  const replacement = spyOn(fs, "copyFileSync").mockImplementation((source, target, flags) => {
+    copy(source, target, flags);
+    if (target === path.join(out, "LICENSE")) {
+      // Publication has started after inventory. Replace a parent, not just the leaf.
+      renameSync(path.join(plugin, "hooks"), path.join(plugin, "original-hooks"));
+      symlinkSync(outside, path.join(plugin, "hooks"));
+    }
+  });
+  try {
+    await expect(convertHooks(plugin, { out })).rejects.toThrow();
+    expect(existsSync(out)).toBe(false);
+  } finally {
+    replacement.mockRestore();
+  }
+});
+
+test("different scripts with identical declarations cannot share generated persistent data", async () => {
+  const dataPaths: string[] = [];
+  for (const version of ["first", "second"]) {
+    const { plugin, project, out } = fixture();
+    writeFileSync(path.join(plugin, "hooks/guard.cjs"), `// ${version}\nrequire("node:fs").writeFileSync("data-path", process.env.CLAUDE_PLUGIN_DATA);`);
+    expect((await convertHooks(plugin, { out })).exitCode).toBe(0);
+    const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+    expect(loaded.errors).toEqual([]);
+    const auth = await AuthStorage.create(":memory:");
+    const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, project, SessionManager.inMemory(project), new ModelRegistry(auth));
+    try {
+      await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: version, input: { command: "allow" } });
+      dataPaths.push(readFileSync(path.join(project, "data-path"), "utf8"));
+    } finally {
+      await runner.emit({ type: "session_shutdown" });
+      runner.clearManagedTimers();
+      auth.close();
+    }
+  }
+  expect(dataPaths[0]).not.toBe(dataPaths[1]);
+  for (const directory of dataPaths) rmSync(directory, { recursive: true, force: true });
+});
+
+test("shared generated hooks consume host input once and keep slash-like continuations as content", async () => {
+  const { plugin, project, out } = fixture();
+  const literal = "/skill:ponytail-review keep these arguments";
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
+    UserPromptSubmit: [{ hooks: [{ type: "command", command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/prompt.cjs"' }] }],
+    Stop: [{ hooks: [{ type: "command", command: `printf '%s' '${JSON.stringify({ decision: "block", reason: literal })}'` }] }],
+  } }));
+  writeFileSync(path.join(plugin, "hooks/prompt.cjs"), `const fs = require("node:fs");
+const input = JSON.parse(fs.readFileSync(0, "utf8"));
+fs.appendFileSync("prompts.jsonl", JSON.stringify(input.prompt) + "\\n");
+if (input.prompt === "deny") { console.log(JSON.stringify({ decision: "block", reason: "fixture denial" })); process.exit(0); }
+console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.stringify(literal)} } }));
+`);
+  expect((await convertHooks(plugin, { out })).exitCode).toBe(0);
+  const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+  expect(loaded.errors).toEqual([]);
+  const messages: Array<{ message: unknown; options: unknown }> = [];
+  loaded.runtime.sendMessage = (message, options) => { messages.push({ message, options }); };
+  loaded.runtime.sendUserMessage = () => { throw new Error("Hook content must not be routed as a user command"); };
+  const auth = await AuthStorage.create(":memory:");
+  const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, project, SessionManager.inMemory(project), new ModelRegistry(auth));
+  try {
+    expect(await runner.emitInput("deny", undefined, "rpc")).toEqual({ handled: true });
+    expect(await runner.emitBeforeAgentStart("deny", undefined, [])).toBeUndefined();
+    expect(await runner.emitInput("ordinary prompt", undefined, "interactive")).toEqual({});
+    expect((await runner.emitBeforeAgentStart("ordinary prompt", undefined, []))?.messages).toEqual([
+      expect.objectContaining({ content: literal, display: false }),
+    ]);
+    await runner.emitBeforeProviderRequest({ messages: [] });
+    await runner.emit({ type: "agent_end", messages: [] });
+    expect(messages).toEqual([{
+      message: expect.objectContaining({ content: literal, display: false }),
+      options: { deliverAs: "followUp", triggerTurn: true },
+    }]);
+    expect(await runner.emitBeforeAgentStart("synthetic continuation", undefined, [])).toBeUndefined();
+    expect(readFileSync(path.join(project, "prompts.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual(["deny", "ordinary prompt"]);
   } finally {
     await runner.emit({ type: "session_shutdown" });
     runner.clearManagedTimers();

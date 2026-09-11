@@ -23,4 +23,6 @@ Focused converter coverage is in `test/conversion-source.test.ts` and `test/conv
 
 The generated-runtime test moves the output, deletes the source plugin, then loads the generated entrypoint through the real OMP extension loader and runner. It observes denial, rewritten tool input, and the script's active-project working directory/environment. Existing adapter tests cover context and lifecycle behavior. A separate CLI smoke check loads generated output in a fresh Bun process outside this repository after removing its source.
 
+Follow-up regressions cover nested project-root detection, distinct persistent data for different script resources, a resource-parent swap after inventory, and startup in successive ephemeral sessions. The input-boundary test calls the real host runner to verify handled denial, one-time preparation, no prompt replay on provider requests/continuations, and preservation of slash-like content with arguments. It does not claim to repair or retest OMP's reported missing RPC/editor/queue dispatch.
+
 No test establishes arbitrary plugin equivalence or external script dependency closure. The converter reports unsupported declarations and dependencies rather than claiming that guarantee.
