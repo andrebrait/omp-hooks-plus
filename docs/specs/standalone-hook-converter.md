@@ -1,6 +1,6 @@
 # Standalone hook converter
 
-Status: architecture approved; written specification awaiting review.
+Status: approved by the user on 2026-09-11; implementation planning in progress.
 
 ## Objective
 
@@ -232,6 +232,7 @@ Inspected source and a temporary runtime probe establish the following, not impl
 - OMP `packages/coding-agent/src/extensibility/plugins/loader.ts` selects `omp` before `pi`, and `packages/coding-agent/src/extensibility/extensions/loader.ts` discovers explicitly configured extension paths independently.
 - A temporary probe using OMP's real `resolvePluginExtensionPaths` and `discoverExtensionPaths` passed: adding an `omp` declaration selected its entrypoint instead of pi; separately configuring the pi file selected both paths; discovery did not execute either source module. The probe removed its temporary files.
 - OMP's `ExtensionAPI.events` exposes an extension communication bus, but the ownership protocol proposed above has not yet been implemented or validated.
+- Implementation planning added a real-host activation-surface probe: the loader distinguished a successful competing factory from a failed one, but the observer extension received no public selected-roster/init-outcome snapshot in either case. The probe passed and cleaned up its temporary state. Safe mixed-source activation therefore requires a separately approved host-interface proposal before the implementation checkpoint can pass; filesystem rediscovery is not a substitute. See the [implementation plan](../plans/standalone-hook-converter.md).
 
 OMP evidence revision: `andrebrait/oh-my-pi` branch `integration`, commit `acef0cdc9ca35468ee862cc78061860323b2eabb`, package version `18.1.17`. These are evidence coordinates, not a promise that all releases with that version have identical capabilities.
 
