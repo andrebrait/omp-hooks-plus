@@ -16,7 +16,7 @@ The converter owns the reusable implementation. `omp-hooks-plus` consumes it as 
 - Conversion performs no model calls, imports of plugin code, hook execution, package installation, or network requests. Runtime execution and explicitly authorized behavioral verification are separate operations.
 - Preserve original hook logic when deterministic adaptation is sufficient. Native TypeScript rewrites are optional skill-assisted work, not a prerequisite for using a complete deterministic conversion.
 - Each applicable source behavior has one selected implementation. Equivalent event names, command strings, or output text alone do not establish cross-format equivalence.
-- Existing `omp-hooks-plus` trust, source-enable, scope, environment-isolation, and disable controls remain authoritative. Conversion artifacts cannot broaden those permissions.
+- In automatic adapter mode, existing `omp-hooks-plus` trust, source-enable, scope, environment-isolation, and disable controls remain authoritative. Standalone packages use the explicit activation policy below; converting a source does not install or authorize its output.
 
 ## Architecture and ownership
 
@@ -69,11 +69,12 @@ Each source argument can name a plugin directory or a Claude hook/settings JSON 
 All commands accept `--target <profile>` to select a bundled OMP capability profile; omission selects the converter release's documented default. Unknown profiles are invalid input. Reports record the selected profile explicitly, and runtime activation checks the required host capabilities. `check` uses the artifact's recorded profile unless an explicit target requests revalidation.
 
 - `inspect` returns the complete inventory, candidate pi bindings, capability decisions, and diagnostics. It does not write files.
-- `convert` writes a new output directory, including the generated bindings and coverage report. It rejects an existing nonempty output directory and any output nested inside the source root. It leaves the source untouched.
+- `convert` writes a new output directory, including generated bindings and the coverage report. It rejects any existing output destination and any output nested inside the source root. It leaves the source untouched.
+- Materialize into a temporary sibling directory, validate the complete or draft artifact there, then publish it as the requested destination. Serialize competing converter invocations for that destination and refuse publication if the destination has appeared; never replace another writer's files. Exit code `1` leaves the requested destination unchanged and removes temporary output. If cleanup itself fails, report the residual temporary path; an interrupted process may leave temporary staging data, never a published success-looking partial package.
 - `check` validates the artifact, source fingerprints, coverage decisions, and target compatibility. It does not execute source or generated code and does not claim behavioral equivalence.
 - All three use the same library analysis. Human-readable output and JSON output describe the same decisions.
 - Exit code `0` means the requested operation completed with no unresolved conversion requirements; `2` means analysis completed but coverage, target compatibility, or activation conflicts remain; `1` means invalid input, invalid artifact, or an operational failure.
-- A well-formed but incomplete conversion may emit its report and draft bindings with exit code `2`. The draft entrypoint refuses activation until required decisions are resolved. There is no silent partial-success mode.
+- A well-formed but incomplete conversion may emit its report and draft source with exit code `2`. Such output is non-installable: no `package.json`, OMP/pi manifest, recognized extension/hook entrypoints, or runnable source tree. Store generated source as inert `.txt` files referenced by the report. `check` continues to return `2` while requirements remain unresolved; after review, `convert --coverage <draft-report>` can emit a complete package into a new destination. There is no runtime-only draft guard that could first shadow an existing pi manifest.
 
 ## Inventory, capability decisions, and evidence
 
@@ -82,6 +83,8 @@ Give each declaration a stable source locator consisting of source kind, source-
 Fingerprint declaration content and the local files on which a coverage decision depends. A correspondence involving pi code includes the relevant TypeScript and local import dependencies; a script-backed decision includes its scripts and known local resources. Unresolved dynamic dependencies remain visible. A declaration locator is not a freshness check or a runtime deduplication key.
 
 The report records the converter version, artifact schema version, target OMP capability profile, source locators and fingerprints, selected implementation, evidence for that selection, and diagnostics. Also record generated/native binding and bundled-resource fingerprints so artifact edits invalidate prior verification evidence. The skill can update a decision after verification; it cannot preserve the old evidence as current merely by changing a checksum.
+
+The converter release bundles a versioned Claude contract snapshot, including recognized event/type/field schemas and semantics, rather than reading live documentation. The first snapshot is identified as `claude-hooks-2026-09-11`; its checked-in content digest and identifier are recorded as `sourceContract` in every coverage report. Updating that snapshot is an explicit reviewed source-contract change. Inventory still enumerates all actual source declarations, including unknown keys outside the snapshot; the snapshot classifies them rather than filtering them away.
 
 Use these coverage states:
 
@@ -114,7 +117,7 @@ Preserve unrelated pi functionality such as resource discovery, commands, tools,
 
 ## Runtime ownership and coexistence
 
-Generated bindings and `omp-hooks-plus` use the same versioned, session-local ownership protocol. Cooperative generated bindings advertise coverage only after successful initialization, before any owned hook can execute. Both generated and automatic dispatch consult the resulting ownership decision. Two incompatible owners produce a conflict; discovery order does not choose a winner.
+Generated bindings and `omp-hooks-plus` use the same versioned, session-local ownership protocol. Both generated and automatic dispatch remain gated until the bounded handshake below completes. Ready generated owners take precedence over automatic fallback only for their validated coverage. Two incompatible generated owners produce a conflict; discovery order does not choose a winner.
 
 A file on disk, a manifest entry, or a coverage assertion does not prove that a binding initialized. Missing or failed generated bindings must not suppress the only working original hook. Stale coverage cannot suppress a source hook. Conversely, when a conflicting handler may already be active and ownership cannot be established, block the converter-managed conflicting path and report the activation conflict instead of guessing or blindly activating a fallback.
 
@@ -124,9 +127,30 @@ Ownership identifies the originating plugin instance and source scope, not just 
 
 Session state must be isolated between concurrent sessions and subagents and reset on reload/disposal. Do not coordinate through an unscoped process-global content set or depend on a single physical copy of the runtime library: generated packages bundle their own code. OMP's shared extension event bus is the candidate public coordination seam; the implementation must prove registration, failure, reload, and session-isolation behavior through that seam before relying on it.
 
+### Ownership handshake contract
+
+The runtime receives an activation snapshot from its OMP adapter: an opaque host-session identity, a reload generation, selected relevant extension identities, and confirmed initialization outcomes. These are requirements on the adapter interface, not claims that OMP already exposes a single snapshot method. The selected target must prove it can obtain a complete snapshot through public host interfaces. If it cannot, mixed-source activation is unsupported and produces an activation conflict instead of an inferred empty roster. The first implementation checkpoint must exercise this seam before broader conversion work proceeds.
+
+Use the stable event-bus channel `omp-hook-converter:ownership`. Every packet carries `protocol: 1`, `kind`, `sessionKey`, `generation`, `requestId`, and `participantId`. Session/generation values come from the activation snapshot, not the working directory, transcript filename, or an independently generated token in each bundle. Runtime tokens are not serialized into deterministic artifacts.
+
+1. **Prepare:** each cooperative factory registers its control listener before asynchronous initialization. Hook callbacks remain inert. It becomes `ready` only after initialization succeeds and coverage/source checks pass, or `unavailable` only when no owned callback can execute. A failed partial initialization is `unknown` until its callbacks are disabled. Registration itself never claims coverage.
+2. **Query:** after the host's factory-binding barrier, the first applicable dispatch broadcasts `kind: "query"` with the selected participant roster and its digest. All dispatchers wait on the same session/generation decision; independently initiated queries must carry an identical roster and use the same selection rules.
+3. **Collect:** participants broadcast `kind: "state"` with terminal state (`ready`, `unavailable`, or `unknown`), supported protocol majors, and claims. A claim contains the originating plugin-instance/scope identity, declaration locator, source fingerprint, implementation fingerprint, and automatic/generated role. Receivers validate identity against the host snapshot and retain packets only for their exact session/generation/request. Absence is not an `unavailable` response; only a host-confirmed failure with no active callbacks can substitute for an absent participant.
+4. **Seal:** derive the owner map deterministically: one valid generated claim wins over automatic fallback; multiple generated claims conflict; automatic fallback is eligible only after every overlapping selected replacement is confirmed unavailable. Broadcast `kind: "seal"` containing a digest of the roster, terminal states, and owner map. Each ready participant must return `kind: "ack"` for the same digest before either path can execute.
+5. **Deadline:** the total query-to-ack deadline is 1,000 milliseconds. Missing responses, unknown state, roster/digest disagreement, or an unsupported protocol major produce an activation conflict and keep every conflicting converter-managed path disabled. There is no timeout-to-fallback behavior. An incompatible peer answers with its supported majors on the same channel; silence is also a conflict, never evidence of compatibility.
+6. **Late changes and disposal:** ownership is sealed for that generation. Late registration, claim changes, or a late response cannot enable callbacks; broadcast `kind: "invalidate"`, stop new conflicting dispatches, and require a fresh host generation/handshake. On reload/disposal, disable callbacks, clear pending deadlines/state, and unsubscribe listeners. Packets from old generations are ignored. An already-started external side effect cannot be undone; late participants remain disabled rather than replaying that occurrence.
+
+The bus does not await asynchronous listeners. Protocol callbacks must explicitly send state/ack packets after their work finishes; the initiator waits for those packets, not for `emit()` to return. The handshake is an activation protocol, not an exactly-once guarantee across process crashes or arbitrary non-cooperative extension code. Test both registration orders, delayed/failed initialization, timeout, protocol mismatch, two independently bundled runtimes, and reload before accepting the seam.
+
+### Activation policy by deployment mode
+
+- **Automatic adapter:** OMP owns discovery and extension enable state. `omp-hooks-plus` applies its existing trust, Claude-provider opt-ins, user/project precedence, source enable state, and `disableAllHooks` semantics before supplying eligible hooks to the shared runtime. Ownership cannot re-enable a source those controls excluded.
+- **Standalone package:** the user explicitly installs/enables the generated package through OMP. OMP's normal extension loading, scope, trust, and enable controls apply; the artifact neither edits those controls nor independently discovers ambient Claude settings/plugins. Source disable directives and scoped activation conditions present in the conversion input are preserved in the artifact. Subsequent changes to the original Claude settings do not dynamically govern this separately installed package; disable it through OMP or reconvert. Report this policy distinction prominently.
+- **Both modes:** resolve runtime root/data environment values per plugin instance, preserve the artifact's declared activation scope, validate its target/coverage, and apply the ownership gate. Standalone activation is not evidence that an automatic source is trusted or enabled. If required host controls or activation evidence are unavailable, diagnose the unsupported activation condition rather than bypassing it.
+
 ## Generated artifact and filesystem safety
 
-A plugin conversion produces:
+A complete plugin conversion produces:
 
 - A valid package manifest with an explicit `omp.extensions` entrypoint and preserved non-hook plugin declarations required by the result.
 - Generated OMP TypeScript bindings and a bundled compatibility runtime where original scripts remain selected.
@@ -180,7 +204,7 @@ Generated artifacts must state that safe coexistence requires the migrated, prot
 | AC-07 | Skills, commands, tools, lifecycle state, and other unrelated functionality survive pi-to-OMP manifest/entrypoint replacement. |
 | AC-08 | Unknown and malformed declarations, unavailable target contracts, unimplemented converter support, and unresolved dependencies remain distinguishable; none disappears through the existing nine-event filter. |
 | AC-09 | Inspection, conversion, and checking do not execute plugin code; path escapes and unsafe output/resource selections are rejected without source mutation. |
-| AC-10 | Identical inputs produce byte-identical outputs. Generation into a nonempty destination fails without modifying its contents. |
+| AC-10 | Identical inputs produce byte-identical outputs. An existing destination is unchanged on rejection; an operational failure publishes no partial package. Exit-2 drafts expose no discoverable OMP/pi entrypoints or package manifest and cannot shadow the original pi selection. |
 | AC-11 | Ownership does not collapse independent plugins or legitimate repeated events. Ownership and context-delivery state are isolated across concurrent sessions and subagents: identical context can be delivered independently, and pending timers/buffers do not leak across reload or disposal. |
 | AC-12 | At least one skill-assisted native port has recorded runnable comparisons for a `PreToolUse` deny case and a corresponding non-denied case: the denied tool does not execute, the non-denied tool does, and both match the original hook's observable outcome. Deterministic checking does not overstate that evidence. |
 | AC-13 | Existing supported `omp-hooks-plus` behavior remains covered by its behavioral tests after the clean cutover, including trust/disable policy, environment isolation, context delivery, compaction, and stop-loop handling. |
@@ -203,4 +227,4 @@ Inspected source and a temporary runtime probe establish the following, not impl
 
 OMP evidence revision: `andrebrait/oh-my-pi` branch `integration`, commit `acef0cdc9ca35468ee862cc78061860323b2eabb`, package version `18.1.17`. These are evidence coordinates, not a promise that all releases with that version have identical capabilities.
 
-Primary source reference: [Claude Code hooks reference](https://code.claude.com/docs/en/hooks), consulted 2026-09-11. The implementation must derive event contracts from that reference and the selected OMP interface rather than treating the current bridge's supported subset as the specification.
+Primary source reference: [Claude Code hooks reference](https://code.claude.com/docs/en/hooks), consulted 2026-09-11. Implementers must capture its event/handler contracts in the versioned snapshot described above and compare them with the selected OMP interface. Inspection and conversion use that bundled snapshot offline; neither the live page nor the current bridge's supported subset is a runtime inventory filter.
