@@ -296,7 +296,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         hookEventName: "PreToolUse",
         toolName: event.toolName,
         toolUseId: event.toolCallId,
-      });
+      }, false, "aside");
     }
   });
 
@@ -326,7 +326,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
           hookEventName: "PostToolUseFailure",
           toolName: event.toolName,
           toolUseId: event.toolCallId,
-        });
+        }, false, "aside");
       }
 
       if (result.stopProcessing) {
@@ -374,7 +374,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         hookEventName: "PostToolUse",
         toolName: event.toolName,
         toolUseId: event.toolCallId,
-      });
+      }, false, "aside");
     }
 
     if (result.stopProcessing) {
