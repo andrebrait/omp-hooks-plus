@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript ESM, Bun, Node-compatible filesystem/crypto/process APIs, existing Bun tests, and public OMP interfaces. Proposed parser dependency and host interface changes require approval below.
 
-**Spec:** [Approved specification](../specs/standalone-hook-converter.md), approved 2026-09-11.
+**Spec:** [Specification](../specs/standalone-hook-converter.md): baseline approved 2026-09-11; review clarifications for explicit plugin scope, concurrent-query coalescing, and activation metadata await user review with this plan.
 
 ## Global constraints
 
@@ -85,13 +85,13 @@ The eventual extraction commit necessarily touches more than five files: it is o
 
 These are proposed converter interfaces, not claims about APIs already present in OMP. Implement them in `contracts.ts` before dependent work; validate JSON at input boundaries rather than casting it to these types.
 
-All four library entry points throw on malformed-input or operational failures; the CLI maps those failures to exit `1`. Returned `0`/`2` values distinguish complete from unresolved analysis, not exceptional failures. This convention applies to `inspectSource`, `planArtifact`, `publishArtifact`, and `checkArtifact`.
+All four library entry points throw on malformed-input or operational failures; the CLI maps those failures to exit `1`. `inspectSource` returns `Analysis.status` (`complete`/`unresolved`); `planArtifact` returns `ArtifactPlan.status` (`complete`/`draft`); the CLI maps those statuses to `0`/`2`. `publishArtifact` returns `void` on successful publication, so `convert` retains the plan's status for its exit code. Only `checkArtifact` directly returns `OperationResult.exitCode`.
 
 ```ts
 export type CoverageState = "adapted" | "covered" | "needs-review" | "target-gap";
 export type SourceScope = "user" | "project" | "local";
 export type SourceInput =
-  | { kind: "plugin"; path: string }
+  | { kind: "plugin"; path: string; scope: SourceScope }
   | { kind: "file"; path: string; sourceRoot: string; scope: SourceScope; name?: string };
 export type Locator = {
   kind: "plugin" | "settings" | "skill" | "agent";
@@ -111,7 +111,11 @@ export type Declaration = {
   raw: Record<string, unknown>;
   fingerprint: string;
 };
-export type AnalysisOptions = { target?: string; coveragePath?: string };
+export type AnalysisOptions = {
+  target?: string;
+  coveragePath?: string;
+  deployment?: "standalone" | "automatic";
+};
 export type FileDigest = { path: string; sha256: string };
 export type ArtifactFile = { path: string; bytes: Uint8Array; executable: boolean };
 export type ArtifactPlan = {
@@ -120,13 +124,32 @@ export type ArtifactPlan = {
   report: CoverageReport;
   files: ArtifactFile[];
 };
-export type Analysis = { sourceRoot: string; report: CoverageReport; files: ArtifactFile[] };
+export type Analysis = {
+  status: "complete" | "unresolved";
+  sourceRoot: string;
+  report: CoverageReport;
+  files: ArtifactFile[];
+};
 export type OperationResult = { exitCode: 0 | 2; report: CoverageReport };
+export type ActivationRequirements = {
+  policy: "standalone-explicit-host-controls" | "automatic-existing-bridge-controls";
+  requiredHostCapabilities: string[];
+  requiredHostControls: string[];
+  scope: SourceScope;
+  disableAllHooks: boolean;
+  ownership: {
+    protocol: 1;
+    completeHostSnapshotRequired: true;
+    oldBridge: "upgrade-or-disable";
+    originalPiEntrypoints: string[];
+  };
+};
 export type CoverageReport = {
   schemaVersion: 1;
   converterVersion: string;
   sourceContract: { id: "claude-hooks-2026-09-11"; sha256: string };
   target: string;
+  activation: ActivationRequirements;
   source: { kind: SourceInput["kind"]; entry: string; scope: SourceScope; name?: string };
   declarations: Declaration[];
   decisions: CoverageDecision[];
@@ -159,6 +182,8 @@ export declare function checkArtifact(
 `Analysis.sourceRoot` and `ArtifactPlan.sourceRoot` are canonical, in-memory containment roots, never serialized artifact metadata. `publishArtifact` uses that root to reject destinations inside the source even when called as a library rather than through the CLI. `Analysis.files` holds selected resource/binding bytes; it is an internal materialization input, not part of the JSON report. Never serialize absolute input paths. `CoverageReport.files` excludes the coverage report itself to avoid self-referential hashing; validate the report's schema/content independently. Resource digests and evidence fingerprints are distinct: updating a digest does not renew behavioral evidence.
 
 `domains` describes a deliberately restricted reviewable partition, not executable predicates. Initially accept only whole domains or provably disjoint exact matcher sets with identical scope whose union equals a finite original matcher set. Regex algebra, arbitrary callbacks, and overlapping/unbounded partitions remain unresolved. This is conservative handling of uncertainty, not silently partial coverage.
+
+`deployment` defaults to `standalone`; only the automatic adapter requests `automatic`, not a user-supplied coverage record. Activation capability/control identifiers are validated against the selected profile. The report records required extension enablement, trust, scope and (for automatic mode) source/provider controls, but runtime rechecks their actual state. `originalPiEntrypoints` are contained source-relative identities resolved against the host-selected plugin instance, not serialized absolute paths. Metadata never grants authorization or overrides an input disable directive.
 
 Runtime policy seam in `runtime/context.ts`:
 
@@ -203,9 +228,9 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 - [ ] Capture the approved Claude reference into the checked-in snapshot during development. Record every documented event, handler type, field, input, scope, output effect, and async/lifecycle rule. Verify its identifier/digest. Live documentation is never read by the shipped CLI.
 - [ ] For every snapshot event/type combination, assess the real target contract. Implement all fully supported mappings, not merely the nine legacy events. Represent missing target semantics separately from unfinished conversion support. Preserve unknown source keys outside the snapshot.
 - [ ] Parse explicit JSON/frontmatter using data parsers only. Enumerate manifest/default/referenced files with stable sorted traversal, root-relative locators and exact JSON pointers/frontmatter positions. Reject lexical/symlink escapes before reading. Do not call ambient OMP discovery or an importer to find declarations.
-- [ ] Implement argument handling with `node:util.parseArgs`; enforce file input root/scope and valid conversion names; reject unknown targets. JSON and human output derive from one analysis object. Operational/validation exceptions are presented as exit `1`, never as `target-gap`.
+- [ ] Implement argument handling with `node:util.parseArgs`; require explicit `--scope` for both plugin and file input, additionally enforce file input root and valid conversion names, and reject unknown targets. A missing plugin scope is invalid input, not an inferred user scope. `check` reuses recorded scope/name. JSON and human output derive from one analysis object. Operational/validation exceptions are presented as exit `1`, never as `target-gap`.
 - [ ] Add workspace membership and an independent converter bin/exports map. Keep OMP value imports out of the analysis/CLI entry graph; type-only OMP imports are erased. Typecheck both packages and emit the converter's distributable CLI/library/declarations. Do not add a direct dependency on the host's discovery barrel.
-- [ ] Run the focused test and invoke `bun packages/converter/src/cli.ts inspect <temporary-plugin> --json` with network disabled. Expected: full inventory, explicit source/target identities, no source execution or mutation. Commit the working inspection slice.
+- [ ] Run the focused test and invoke `bun packages/converter/src/cli.ts inspect <temporary-plugin> --scope project --json` with network disabled. Expected: full inventory, explicit source/target identities, no source execution or mutation. Commit the working inspection slice.
 
 ### Task 3: Bind coverage to source and dependency freshness
 
@@ -253,9 +278,10 @@ Task 1 supplies the separately reviewed host snapshot bridge; Task 6 extends thi
 
 **Consumes:** the actual approved host snapshot bridge, current coverage claims, public event bus. **Produces:** one deterministic owner map per host session/generation; blocked or approved dispatch, never guessed ownership.
 
-- [ ] Build two independently bundled runtime copies and attach them to the real host bus. Register generated and automatic factories in both orders. Count external observable effects for repeated events and identical hooks in separate plugin instances.
+- [ ] Build two independently bundled runtime copies and attach them to the real host bus. Register generated and automatic factories in both orders, then release two first-dispatch calls concurrently through a barrier. Assert both bundles use the same request/owner decision and duplicate queries do not restart the deadline. Count external observable effects for repeated events and identical hooks in separate plugin instances.
 - [ ] Add missing/delayed/throwing/partially initialized generated factories, two generated claimants, old protocol, no response, different roster/seal digest, late registration, original pi overlap, shared bus sessions, reload, and disposal. Inject malformed payloads, unselected participant identities, and replayed session/generation/request packets through a separate bus listener; assert rejection cannot enable managed dispatch. The shared bus is not an authentication boundary against arbitrary same-process code impersonating a valid participant. Run `bun test packages/converter/test/ownership.test.ts` before protocol implementation.
 - [ ] Register control listeners before async preparation (the local Prepare stage, not a packet); keep hooks inert. Implement the `query`, `state`, `seal`, `ack`, and `invalidate` packets with the exact spec envelope. Validate host identities and session/generation/request on every packet; send explicit responses because `emit` does not await async callbacks.
+- [ ] Derive `requestId` from the exact SHA-256/UTF-8 JSON tuple in the specification. Coalesce concurrent queries for the host session/generation/roster into one pending decision in each bundle. Reply idempotently with current state/ack; reject a roster inconsistent with the host snapshot and never reset the query-to-ack deadline on duplicate queries.
 - [ ] Derive claims from originating plugin instance/scope plus declaration and implementation fingerprints, not display names or text. Compute owner maps and digests with stable sorting. Generated wins only for validated overlapping coverage; multiple generated owners conflict. Automatic fallback requires every overlapping replacement confirmed unavailable, including callback safety.
 - [ ] Treat an old bridge, independently active original pi binding, missing host data, unknown partial state, protocol mismatch, timeout, or disagreement as a visible activation conflict. Do not choose a winner by registration order or fall back after the 1,000ms deadline.
 - [ ] Invalidate new dispatch eligibility before accepting a changed generation. Cancel deadlines, unsubscribe listeners, and reject stale packets after disposal. Runtime session tokens never enter generated reports.
