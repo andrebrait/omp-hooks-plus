@@ -33,7 +33,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build src/omp-hooks.ts --target=bun --outdir=dist",
+    "build": "bun build src/omp-hooks.ts --target=bun --packages=external --outdir=dist",
     "convert": "bun src/convert.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
