@@ -11,6 +11,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { convertHooks } from "../src/convert";
 import type { ConvertOptions } from "../src/convert";
+import * as conversionSource from "../src/conversion-source";
 
 const temporary: string[] = [];
 afterEach(() => { for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -333,5 +334,45 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
     await runner.emit({ type: "session_shutdown" });
     runner.clearManagedTimers();
     auth.close();
+  }
+});
+
+test.each(["symlink", "directory"])("source root replacement before resource collection fails closed (%s)", async (kind) => {
+  const { root, plugin, out } = fixture();
+  const replacement = path.join(root, "replacement");
+  mkdirSync(replacement);
+  writeFileSync(path.join(replacement, "outside.txt"), "OUTSIDE");
+  const original = conversionSource.loadConversionSource;
+  let swapped = false;
+  const race = spyOn(conversionSource, "loadConversionSource").mockImplementation(async (input, options) => {
+    const source = await original(input, options);
+    if (!swapped && input === plugin) {
+      swapped = true;
+      renameSync(plugin, `${plugin}-saved`);
+      if (kind === "symlink") symlinkSync(replacement, plugin);
+      else renameSync(replacement, plugin);
+    }
+    return source;
+  });
+  try {
+    await expect(convertHooks(plugin, { out })).rejects.toThrow();
+    expect(swapped).toBe(true);
+    expect(existsSync(out)).toBe(false);
+  } finally {
+    race.mockRestore();
+  }
+});
+
+test("unrelated absolute path prefixes do not masquerade as source-root references", async () => {
+  const { plugin } = fixture();
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({
+    hooks: { Stop: [{ hooks: [{ type: "command", command: "node", args: [`${plugin}-extra/guard.js`] }] }] },
+  }));
+  expect((await convertHooks(plugin, { dryRun: true })).exitCode).toBe(0);
+  for (const reference of [plugin, `${plugin}/hooks/guard.cjs`]) {
+    writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "node", args: [reference] }] }] },
+    }));
+    expect((await convertHooks(plugin, { dryRun: true })).exitCode).toBe(2);
   }
 });

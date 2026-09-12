@@ -131,7 +131,7 @@ bun run convert /path/to/claude-plugin --out /path/to/new-output
 
 Load `/path/to/new-output/index.ts` as an OMP extension. The generated adapter and resources are self-contained: the converter and this bridge do not need to remain installed. OMP/Bun and the scripts' external executables and dependencies are still required.
 
-For a settings file, no surrounding project files are copied automatically:
+For a settings file, resource inventory and copying cover only explicitly selected paths, not the surrounding project. An empty omission list therefore does not mean every project dependency was copied:
 
 ```sh
 bun run convert /project/.claude/settings.json \

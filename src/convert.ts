@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import {
+  assertConversionRoot,
   loadConversionSource,
   type ConversionReport,
   type ConversionSource,
@@ -72,7 +73,8 @@ function collectResources(source: ConversionSource, includes: string[]): { files
   const excluded = new Set<string>();
   const omitted = new Set<string>();
   const declarations = new Set(source.declarationFiles.map(file => path.resolve(file)));
-  const realRoot = realpathSync(source.root);
+  assertConversionRoot(source);
+  const realRoot = source.rootIdentity.realPath;
   const selected = includes.map(include => {
     if (path.isAbsolute(include)) throw new Error("--include paths must be relative to the source root");
     if (include.split(path.sep).includes("..")) throw new Error("--include paths cannot contain parent traversal");
@@ -211,10 +213,11 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
   const source = await loadConversionSource(input, { sourceRoot: options.sourceRoot });
   const destination = options.out ? destinationPath(options.out, source.root) : undefined;
   const resources = collectResources(source, options.include ?? []);
+  const sourceReference = new RegExp(`${source.root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[/\\\\\\s"'\\x60;&|()<>])`);
   for (const groups of Object.values(source.settings.hooks ?? {})) {
     for (const group of groups ?? []) {
       for (const hook of group.hooks ?? []) {
-        if (hook.command.includes(source.root) || hook.args?.some(argument => argument.includes(source.root))) {
+        if (sourceReference.test(hook.command) || hook.args?.some(argument => sourceReference.test(argument))) {
           source.report.diagnostics.push({ level: "unsupported", message: "A command embeds the original absolute source root; review its resource references before conversion" });
         }
       }
@@ -222,7 +225,7 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
   }
   source.report.diagnostics.push({ level: "info", message: "Commands retain their shell and active-project working directory. External executables, services and script dependencies remain required; arbitrary script dependency closure is not verified." });
   if (source.kind === "file") {
-    source.report.diagnostics.push({ level: "info", message: "File inputs do not copy the containing project. Use --source-root and --include for resources referenced through CLAUDE_PLUGIN_ROOT; ordinary relative commands remain project-relative." });
+    source.report.diagnostics.push({ level: "info", message: "File inputs do not inventory or copy the containing project: resource reports cover only --include paths, not unselected project files. Use --source-root and --include for resources referenced through CLAUDE_PLUGIN_ROOT; ordinary relative commands remain project-relative." });
   }
   const exitCode = source.report.diagnostics.some(item => item.level === "error") ? 1
     : source.report.diagnostics.some(item => item.level === "unsupported") ? 2 : 0;
@@ -240,6 +243,7 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
 
   // Build before touching the destination. mkdir is exclusive across converter invocations.
   const adapter = exitCode === 0 ? bundledAdapter() : undefined;
+  assertConversionRoot(source);
   mkdirSync(destination!);
   try {
     const resourceHash = createHash("sha256");
@@ -249,6 +253,7 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
       writeFileSync(path.join(destination!, "lib", "adapter.js"), adapter, { flag: "wx" });
       copyFileSync(fileURLToPath(new URL("../LICENSE", import.meta.url)), path.join(destination!, "LICENSE"), constants.COPYFILE_EXCL);
       for (const resource of resources.files) {
+        assertConversionRoot(source);
         const target = path.join(destination!, "resources", resource.relative);
         mkdirSync(path.dirname(target), { recursive: true });
         // Bind copying to the inventoried inode, including protection against swapped parents.
@@ -274,6 +279,7 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
         }
       }
     }
+    assertConversionRoot(source);
     writeFileSync(path.join(destination!, "conversion-report.json"), `${JSON.stringify(report, null, 2)}\n`, { flag: "wx" });
     if (adapter) {
       // Publish the discoverable entrypoint last, in one no-replace filesystem operation.

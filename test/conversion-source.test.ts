@@ -1,5 +1,6 @@
-import { afterEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { afterEach, expect, spyOn, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { loadConversionSource } from "../src/conversion-source";
@@ -280,4 +281,33 @@ test("unrelated skill frontmatter is not excluded from copied resources", async 
   expect(source.declarationFiles).not.toContain(skill);
   expect(source.report.hooks).toEqual([]);
   expect(source.report.diagnostics.filter(({ level }) => level !== "info")).toEqual([]);
+});
+
+test.each(["json", "frontmatter"])("declaration parent replacement cannot import outside %s", async (kind) => {
+  const root = tempRoot();
+  const outside = tempRoot();
+  const relative = kind === "json" ? "hooks/hooks.json" : "skills/check/SKILL.md";
+  const target = put(root, relative, kind === "json" ? { hooks: { Stop: [group("echo safe")] } } : "---\nname: safe\n---\n");
+  put(outside, path.basename(target), kind === "json"
+    ? { hooks: { OutsideOnly: [group("echo outside")] } }
+    : "---\nhooks:\n  OutsideOnly: []\n---\n");
+  const original = fsPromises.realpath;
+  let swapped = false;
+  const race = spyOn(fsPromises, "realpath").mockImplementation(async (file, options) => {
+    const canonical = await original(file, options as never);
+    if (!swapped && file === target) {
+      swapped = true;
+      renameSync(path.dirname(target), `${path.dirname(target)}-saved`);
+      symlinkSync(outside, path.dirname(target));
+    }
+    return canonical;
+  });
+  try {
+    const source = await loadConversionSource(root);
+    expect(swapped).toBe(true);
+    expect(source.report.hooks.some(hook => hook.event === "OutsideOnly")).toBe(false);
+    expect(source.report.diagnostics).toContainEqual(expect.objectContaining({ level: "error", file: relative }));
+  } finally {
+    race.mockRestore();
+  }
 });

@@ -1,4 +1,5 @@
-import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
+import { constants, realpathSync, statSync } from "node:fs";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { HOOK_KEYS, parseHook, parseSettings } from "./claude";
@@ -31,6 +32,7 @@ export type ConversionReport = {
 
 export type ConversionSource = {
   root: string;
+  rootIdentity: { realPath: string; dev: number; ino: number };
   kind: "plugin" | "file";
   name: string;
   settings: SettingsFile;
@@ -57,6 +59,17 @@ const within = (root: string, target: string) => {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 };
 
+/** Keep source loading, resource inventory, and publication bound to the same directory. */
+export function assertConversionRoot(source: Pick<ConversionSource, "root" | "rootIdentity">): void {
+  const { root, rootIdentity } = source;
+  const canonical = realpathSync(root);
+  const current = statSync(root);
+  if (canonical !== rootIdentity.realPath || !current.isDirectory() ||
+      current.dev !== rootIdentity.dev || current.ino !== rootIdentity.ino) {
+    throw new Error("Source root changed during conversion; retry with a stable source.");
+  }
+}
+
 /** Static inventory only: this function never discovers ambient settings or loads source code. */
 export async function loadConversionSource(
   input: string,
@@ -77,6 +90,8 @@ export async function loadConversionSource(
   const rootStat = await stat(root).catch(() => undefined);
   if (!rootStat?.isDirectory()) throw new Error("sourceRoot must be an existing directory.");
   const realRoot = await realpath(root);
+  const rootIdentity = { realPath: realRoot, dev: rootStat.dev, ino: rootStat.ino };
+  assertConversionRoot({ root, rootIdentity });
   if (!within(root, entry) || !within(realRoot, await realpath(entry))) {
     throw new Error("Source input escapes sourceRoot, lexically or through a symlink.");
   }
@@ -130,13 +145,34 @@ export async function loadConversionSource(
     }
   }
 
+  async function readDeclaration(file: string): Promise<{ canonical: string; text: string }> {
+    assertConversionRoot({ root, rootIdentity });
+    const canonical = await realpath(file);
+    if (!within(realRoot, canonical)) throw new Error("Declaration escapes the source root.");
+    const expected = await lstat(canonical);
+    if (!expected.isFile()) throw new Error("Declaration must be a regular file.");
+    const handle = await open(canonical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.dev !== expected.dev || opened.ino !== expected.ino ||
+          await realpath(file) !== canonical || await realpath(canonical) !== canonical) {
+        throw new Error("Declaration changed during conversion.");
+      }
+      assertConversionRoot({ root, rootIdentity });
+      const text = await handle.readFile("utf8");
+      assertConversionRoot({ root, rootIdentity });
+      return { canonical, text };
+    } finally {
+      await handle.close();
+    }
+  }
+
   async function json(file: string, explicit = false): Promise<unknown> {
     const location = { file: relative(file), pointer: "" };
     declarationFiles.add(file);
-    declarationFiles.add(await realpath(file));
     try {
-      if (!(await stat(file)).isFile()) throw new Error("not a file");
-      const text = await readFile(file, "utf8");
+      const { canonical, text } = await readDeclaration(file);
+      declarationFiles.add(canonical);
       try {
         return JSON.parse(text);
       } catch {
@@ -302,15 +338,17 @@ export async function loadConversionSource(
 
   const seenFrontmatter = new Set<string>();
   async function frontmatter(file: string): Promise<void> {
-    const canonical = await realpath(file);
-    if (seenFrontmatter.has(canonical)) return;
-    seenFrontmatter.add(canonical);
     const location = { file: relative(file), pointer: "/frontmatter" };
+    let canonical: string;
     let text: string;
-    try { text = await readFile(file, "utf8"); } catch {
+    try {
+      ({ canonical, text } = await readDeclaration(file));
+    } catch {
       diagnostic("error", location, "Cannot read scoped declaration file.");
       return;
     }
+    if (seenFrontmatter.has(canonical)) return;
+    seenFrontmatter.add(canonical);
     const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
     if (lines[0]?.trim() !== "---") return;
     const end = lines.findIndex((line, index) => index > 0 && /^(---|\.\.\.)\s*$/.test(line));
@@ -441,5 +479,6 @@ export async function loadConversionSource(
       else if (value !== undefined) diagnostic("error", { file: "package.json", pointer: "" }, "Package manifest must be a JSON object.");
     }
   }
-  return { root, kind, name: report.source.name, settings: merged, declarationFiles: [...declarationFiles], report };
+  assertConversionRoot({ root, rootIdentity });
+  return { root, rootIdentity, kind, name: report.source.name, settings: merged, declarationFiles: [...declarationFiles], report };
 }
