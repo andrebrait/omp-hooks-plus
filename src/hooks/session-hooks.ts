@@ -35,12 +35,14 @@ export function registerSessionHooks(
   });
 
   pi.on("session_before_switch", async (event, ctx) => {
+    shared.resetSession();
     if (event.reason === "resume") {
       await shared.triggerSessionStartHook("resume", ctx);
     }
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    shared.dispose();
     const reason = "other";
 
     // SessionEnd is always triggered by session_shutdown; matcher uses "other" only.
@@ -52,8 +54,7 @@ export function registerSessionHooks(
         cwd: ctx.cwd,
         hookEventName: "SessionEnd",
         reason,
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: shared.captureContext().injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),

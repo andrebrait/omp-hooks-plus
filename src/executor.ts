@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { toClaudeToolName } from "./config";
+import {
+  isInternalUrlPath,
+  isReadableUrlPath,
+  resolveReadPath,
+  splitPathAndSelPreferringLiteralSync,
+} from "@oh-my-pi/pi-coding-agent/tools/path-utils";
+import { toClaudeToolName } from "./claude";
 import type { Hook, HookExecutionContext } from "./types";
 
 // ============================================================================
@@ -68,11 +74,17 @@ export function buildHookInput(ctx: HookExecutionContext): object {
 
     // Read/Edit/Write: OMP sends .path, Claude Code sends .file_path
     if (toolName === "Read" || toolName === "Edit" || toolName === "Write") {
-      if (rawToolInput.path && !rawToolInput.file_path) {
-        toolInputAliases.file_path = rawToolInput.path;
+      if (typeof rawToolInput.path === "string" && rawToolInput.path && !rawToolInput.file_path) {
+        if (toolName !== "Read") {
+          toolInputAliases.file_path = rawToolInput.path;
+        } else if (!isInternalUrlPath(rawToolInput.path) && !isReadableUrlPath(rawToolInput.path) && !rawToolInput.path.includes("://")) {
+          // Keep the original path/selector for OMP-aware hooks; Claude hooks need the filesystem target.
+          const target = splitPathAndSelPreferringLiteralSync(rawToolInput.path, ctx.cwd);
+          toolInputAliases.file_path = resolveReadPath(target.path, ctx.cwd);
+        }
       }
-      // Read (URL): some Claude hook scripts expect .url and .prompt
-      if (toolName === "Read" && typeof rawToolInput.path === "string" && rawToolInput.path.startsWith("http")) {
+      // Read URLs remain opaque; never misrepresent them as local file paths.
+      if (toolName === "Read" && typeof rawToolInput.path === "string" && isReadableUrlPath(rawToolInput.path)) {
         if (!rawToolInput.url) toolInputAliases.url = rawToolInput.path;
         if (rawToolInput.i && !rawToolInput.prompt) toolInputAliases.prompt = rawToolInput.i;
       }

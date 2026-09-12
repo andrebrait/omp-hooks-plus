@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { executeHook } from "../src/executor";
+import { buildHookInput, executeHook } from "../src/executor";
+import { executeParsedHook } from "../src/hooks/shared";
 
 const roots: string[] = [];
 
@@ -47,4 +48,58 @@ describe("hook timeout", () => {
     expect(result.stdout).toBe("ready");
   });
 
+});
+
+test("read selectors reach the same file-sensitive command hook as a plain path", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "omp-hooks-path-"));
+  roots.push(root);
+  writeFileSync(path.join(root, "sample.ts"), "protected source");
+  const guard = path.join(root, "guard.cjs");
+  writeFileSync(guard, `const fs = require("node:fs");
+const { tool_input } = JSON.parse(fs.readFileSync(0, "utf8"));
+if (fs.readFileSync(tool_input.file_path, "utf8") === "protected source") {
+  console.log(JSON.stringify({ hookSpecificOutput: { permissionDecision: "deny", permissionDecisionReason: "protected source" } }));
+}`);
+  for (const requested of ["sample.ts", "sample.ts:1-2", "sample.ts:raw:1-2", "sample.ts:1-2,4-5"]) {
+    const result = await executeParsedHook(
+      { type: "command", command: "node", args: [guard] },
+      { cwd: root, sessionId: "paths", hookEventName: "PreToolUse", toolName: "read", toolInput: { path: requested } },
+      "PreToolUse",
+    );
+    expect(result.hookResult.exitCode).toBe(0);
+    expect(result.commonOutput?.hookSpecificOutput).toMatchObject({
+      permissionDecision: "deny", permissionDecisionReason: "protected source",
+    });
+  }
+});
+
+test("literal selector-shaped filenames win and write targets are not read selectors", () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "omp-hooks-literal-"));
+  roots.push(root);
+  writeFileSync(path.join(root, "sample.ts:1-2"), "literal source");
+  symlinkSync("missing", path.join(root, "dangling:raw"));
+  const inputFor = (toolName: string, requested: string) => buildHookInput({
+    cwd: root, sessionId: "paths", hookEventName: "PreToolUse", toolName, toolInput: { path: requested },
+  }) as { tool_input: { path: string; file_path?: string } };
+  expect(inputFor("read", "sample.ts:1-2").tool_input).toEqual({
+    path: "sample.ts:1-2", file_path: path.join(root, "sample.ts:1-2"),
+  });
+  expect(inputFor("read", "dangling:raw").tool_input.file_path).toBe(path.join(root, "dangling:raw"));
+  expect(inputFor("write", "new:1-2").tool_input.file_path).toBe("new:1-2");
+  expect(inputFor("edit", "sample.ts:1-2").tool_input.file_path).toBe("sample.ts:1-2");
+});
+
+test("read URLs stay opaque rather than becoming local filesystem aliases", () => {
+  const inputFor = (input: Record<string, unknown>) => buildHookInput({
+    cwd: "/project", sessionId: "paths", hookEventName: "PreToolUse", toolName: "read", toolInput: input,
+  }) as { tool_input: Record<string, unknown> };
+  const web = "https://example.com:8080/page:1-2";
+  expect(inputFor({ path: web, i: "Inspect page" }).tool_input).toEqual({
+    path: web, i: "Inspect page", url: web, prompt: "Inspect page",
+  });
+  for (const target of ["skill://example:1-2", "mcp://server/resource:raw", "ssh://host:2222/file:1-2"]) {
+    expect(inputFor({ path: target }).tool_input).toEqual({ path: target });
+  }
+  expect(inputFor({ path: "http-not-a-url.ts" }).tool_input.file_path).toBe("/project/http-not-a-url.ts");
+  expect(inputFor({ path: "sample.ts:1-2", file_path: "explicit.ts" }).tool_input.file_path).toBe("explicit.ts");
 });

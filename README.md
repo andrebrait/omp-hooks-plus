@@ -93,6 +93,8 @@ Supported event mappings include:
 
 Matching handlers are deduplicated by command, arguments, and environment and normally run in parallel. Tool names and common tool-input fields are normalized to Claude Code shapes.
 
+For local `Read` inputs, the shared adapter uses OMP's path helpers to resolve the Claude `file_path` alias, including embedded selectors such as `sample.ts:1-2`. Existing literal colon-containing filenames take precedence. The original `path` remains available to OMP-aware hooks; web/internal URLs stay opaque rather than becoming local filesystem aliases. `Edit` and `Write` paths are not interpreted as read selectors.
+
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts terminate the complete process group on macOS and Linux. Repeated blocking from a `Stop` hook is suppressed after one follow-up turn.
 
 Successful plain-text output never creates a notification. `SessionStart` and `UserPromptSubmit` add it to model context; `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, and `Stop` ignore it. Structured JSON handling and failed-hook diagnostics are unchanged.
@@ -112,6 +114,50 @@ Plugin manifests and hook configuration files are re-read whenever hook settings
 Claude Code's user-plugin registry is opt-in, following OMP's `claude`/`claude-plugins` user-source settings. OMP-managed plugins do not require that opt-in. This requires OMP 18.1.16 or later, whose discovery API exposes each plugin's registry origin.
 
 The doctor reports these limits rather than implying full parity. OMP's native Claude provider continues to own skill discovery; this package does not copy or reimplement it.
+
+Both the live bridge and generated hooks depend on OMP emitting the mapped events. In hosts where RPC/Ctrl+Enter bypass `input`, `UserPromptSubmit` cannot intercept those submissions. If queue-started runs bypass `before_agent_start`, prompt-context preparation is not delivered there. These are host dispatch limitations, not repaired by replaying input, hooking every provider request, or treating synthetic continuations as new user submissions.
+
+Hook-produced text is content, not a slash-command invocation. The bridge creates no skill aliases and does not reinterpret `sendUserMessage` as command execution. Session shutdown still runs `SessionEnd` commands, but does not deliver reminders or start new turns after disposal.
+
+## One-shot conversion
+
+To generate standalone OMP hooks instead of using live discovery, run the converter from a checkout of this repository:
+
+```sh
+bun install --frozen-lockfile
+bun run convert /path/to/claude-plugin --dry-run
+bun run convert /path/to/claude-plugin --out /path/to/new-output
+```
+
+Load `/path/to/new-output/index.ts` as an OMP extension. The generated adapter and resources are self-contained: the converter and this bridge do not need to remain installed. OMP/Bun and the scripts' external executables and dependencies are still required.
+
+For a settings file, resource inventory and copying cover only explicitly selected paths, not the surrounding project. An empty omission list therefore does not mean every project dependency was copied:
+
+```sh
+bun run convert /project/.claude/settings.json \
+  --source-root /project --include scripts \
+  --out /path/to/new-output --json
+```
+
+`--include` may be repeated. For plugin directories, supplying it restricts resource copying to the selected paths; omitting it copies all eligible resources. Declaration inventory always covers the whole plugin, including scoped hooks outside selected resources. Reports distinguish excluded resources from resources omitted by selection; neither category proves a file is unnecessary. Included resources are available through `CLAUDE_PLUGIN_ROOT`; ordinary relative commands retain the active project's working directory. Output must be a new directory outside the source root, and its parent must already exist. Disable overlapping original hooks before enabling generated hooks.
+
+Generated hooks default to `--activation enabled`: they run wherever OMP enables the extension, including untrusted projects. This preserves global policy hooks. For hooks that must not run in untrusted projects, select `--activation project-trusted`; the generated adapter checks OMP's current project trust before each settings lookup, including cached settings. Both modes preserve `disableAllHooks`. This is an execution gate, not a sandbox, and it does not change the automatic extension's existing user/project discovery and trust rules.
+
+```sh
+bun run convert /path/to/claude-plugin \
+  --include hooks --include skills --activation project-trusted \
+  --out /path/to/new-output
+```
+
+Exit codes: **0** supported, **1** invalid input/operational failure, **2** unsupported declarations or resources. Unsupported input produces a report only, never a partial runnable extension. `--dry-run` writes nothing; `--json` prints the inventory report.
+
+The converter inventories unsupported events, non-command handlers, unknown hook fields, and scoped frontmatter hooks rather than dropping them. String `statusMessage` metadata is accepted, with an explicit report that its UI presentation is not reproduced; malformed metadata remains invalid. Selected resource symlinks remain unsupported, and explicit includes cannot traverse symlinks. Unselected symlinks are reported as omitted without being followed; declaration containment checks still apply independently.
+
+Reports identify the conversion level as `command-hook-adaptation` and record the effective activation policy. Detected Pi and OMP bindings are listed by declaration location as `not-reused`. Successful conversion is not a native port: native commands, recovery tools, provider integration, system-prompt ownership, and native session state are not reproduced. Keep manual native adapters where those capabilities are required.
+
+Plugin resources exclude declaration files, package manifests/lockfiles, caches, common credentials, and environment files. Review reported exclusions, omissions, and script dependencies before use. Filename exclusions are not a secret scanner, and conversion does not prove arbitrary script dependency closure.
+
+See the [conversion contract](docs/specs/standalone-hook-converter.md) and [implementation notes](docs/plans/standalone-hook-converter.md).
 
 ## Development
 

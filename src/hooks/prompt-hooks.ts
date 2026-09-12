@@ -1,6 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { getHookGroups } from "../config";
-import { resetInjectedContext } from "../hook-context";
+import { getHookGroups } from "../claude";
 import type { HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
@@ -105,7 +104,8 @@ export function registerPromptHooks(
   shared: HookModuleContext,
 ) {
   pi.on("input", async (event, ctx) => {
-    resetInjectedContext();
+    const delivery = shared.captureContext();
+    shared.resetInjectedContext();
     shared.pendingUserPromptContext = undefined;
     shared.stopHookActive = false;
 
@@ -116,12 +116,12 @@ export function registerPromptHooks(
         hookEventName: "UserPromptSubmit",
         transcriptPath: ctx.sessionManager.getSessionFile(),
         prompt: event.text,
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
+    if (!delivery.isActive()) return { handled: true };
 
     if (result.blocked) {
       shared.notify(

@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { getHookGroups, toClaudeToolName } from "../config";
+import { getHookGroups, toClaudeToolName } from "../claude";
 import { extractErrorFromContent } from "../helpers";
 import type { HookModuleContext } from "../hook-context";
 import type {
@@ -243,6 +243,7 @@ function replacementContent(value: unknown) {
 
 export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   pi.on("tool_call", async (event, ctx) => {
+    const delivery = shared.captureContext();
     const result = await triggerPreToolUseHooks(
       event.toolName,
       {
@@ -253,12 +254,15 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         toolName: event.toolName,
         toolInput: event.input as Record<string, unknown>,
         toolUseId: event.toolCallId,
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
+    // A stale event must never become implicit permission to execute a tool.
+    if (!delivery.isActive()) {
+      return { block: true, reason: result.reason ?? result.stopReason ?? "Hook completed after the session changed" };
+    }
 
     if (result.updatedInput) {
       Object.assign(event.input, result.updatedInput);
@@ -285,14 +289,14 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         result.confirmationReason,
         { timeout: 30_000 },
       );
-      if (!approved) {
+      if (!approved || !delivery.isActive()) {
         return { block: true, reason: result.confirmationReason };
       }
     }
 
 
     if (result.additionalContext) {
-      shared.injectHiddenContext(result.additionalContext, {
+      delivery.injectHiddenContext(result.additionalContext, {
         hookEventName: "PreToolUse",
         toolName: event.toolName,
         toolUseId: event.toolCallId,
@@ -301,6 +305,7 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   });
 
   pi.on("tool_result", async (event, ctx) => {
+    const delivery = shared.captureContext();
     if (event.isError) {
       const result = await triggerPostToolUseFailureHooks(
         event.toolName,
@@ -314,22 +319,21 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
           toolUseId: event.toolCallId,
           error: extractErrorFromContent(event.content),
           isInterrupt: false,
-          asyncContextSink: (content, details, triggerTurn) =>
-            shared.injectHiddenContext(content, details, triggerTurn),
+          asyncContextSink: delivery.injectHiddenContext,
         },
         await shared.settingsFor(ctx),
         (msg, type) => shared.notify(ctx, msg, type),
       );
 
       if (result.additionalContext) {
-        shared.injectHiddenContext(result.additionalContext, {
+        delivery.injectHiddenContext(result.additionalContext, {
           hookEventName: "PostToolUseFailure",
           toolName: event.toolName,
           toolUseId: event.toolCallId,
         }, false, "aside");
       }
 
-      if (result.stopProcessing) {
+      if (result.stopProcessing && delivery.isActive()) {
         ctx.abort?.();
       }
 
@@ -362,22 +366,21 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         toolInput: event.input as Record<string, unknown>,
         toolUseId: event.toolCallId,
         toolResponse: shared.buildToolResponse(event),
-        asyncContextSink: (content, details, triggerTurn) =>
-          shared.injectHiddenContext(content, details, triggerTurn),
+        asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
     if (result.additionalContext) {
-      shared.injectHiddenContext(result.additionalContext, {
+      delivery.injectHiddenContext(result.additionalContext, {
         hookEventName: "PostToolUse",
         toolName: event.toolName,
         toolUseId: event.toolCallId,
       }, false, "aside");
     }
 
-    if (result.stopProcessing) {
+    if (result.stopProcessing && delivery.isActive()) {
       ctx.abort?.();
     }
 

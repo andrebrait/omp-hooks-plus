@@ -1,50 +1,24 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { loadSettings, type LoadedSettings } from "./config";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import type { HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
 
-// Debounce buffer for injectHiddenContext — module-level so parallel calls
-// within the same process share one queue. 50ms window collapses a burst of
-// grep/glob injections into one combined sendMessage.
-const _injectBuffer: { content: string[]; details: Record<string, unknown>; timer: NodeJS.Timeout | undefined } = {
-  content: [],
-  details: {},
-  timer: undefined,
-};
-
-// Per-turn dedup for injected context. A PreToolUse hook that prints a standing
-// reminder fires once per tool call, so a turn with a dozen grep/read calls used
-// to queue a dozen byte-identical hidden messages. Claude Code attaches its
-// additionalContext to the individual tool call, so a repeat reads as part of
-// that tool's result; OMP delivers standalone messages, where a repeat is pure
-// noise. Keyed on the exact content string, matching Claude's handler dedup.
-// Cleared on each new user prompt and compaction, which replaces prior context.
-const _injectedThisTurn = new Set<string>();
-
-/** Claim `content` for this turn. False when it was already injected. */
-export function claimInjectedContext(content: string): boolean {
-  if (_injectedThisTurn.has(content)) return false;
-  _injectedThisTurn.add(content);
-  return true;
-}
-
-/** Re-arm reminders when a new user prompt or compaction resets their context. */
-export function resetInjectedContext(): void {
-  _injectedThisTurn.clear();
-  // Queued messages have not entered the old context and must stay deduplicated.
-  for (const content of _injectBuffer.content) _injectedThisTurn.add(content);
-}
 
 export type HookModuleContext = {
   pi: ExtensionAPI;
-  currentSettings: SettingsFile | undefined;
-  currentLoad: LoadedSettings | undefined;
   firedSessionStartKeys: Set<string>;
   pendingUserPromptContext?: string;
   stopHookActive: boolean;
+  claimInjectedContext: (content: string) => boolean;
+  resetInjectedContext: () => void;
+  resetSession: () => void;
+  dispose: () => void;
+  captureContext: () => {
+    isActive: () => boolean;
+    injectHiddenContext: HookModuleContext["injectHiddenContext"];
+  };
   getSessionId: (ctx: ExtensionContext) => string;
   notify: (ctx: ExtensionContext, msg: string, type: NotifyType) => void;
   injectHiddenContext: (
@@ -65,20 +39,65 @@ export type HookModuleContext = {
   ) => Promise<void>;
 };
 
-export function createHookContext(pi: ExtensionAPI): HookModuleContext {
+export function createHookContext(
+  pi: ExtensionAPI,
+  settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>,
+): HookModuleContext {
+  // Each adapter owns its own debounce queue and per-turn exact-content dedup.
+  const injectBuffer: {
+    content: string[];
+    details: Record<string, unknown>;
+    timer: NodeJS.Timeout | undefined;
+  } = { content: [], details: {}, timer: undefined };
+  const injectedThisTurn = new Set<string>();
+  let disposed = false;
+  let sessionVersion = 0;
   const shared: HookModuleContext = {
     pi,
-    currentSettings: undefined,
-    currentLoad: undefined,
     firedSessionStartKeys: new Set<string>(),
     pendingUserPromptContext: undefined,
     stopHookActive: false,
+    claimInjectedContext: (content) => {
+      if (disposed || injectedThisTurn.has(content)) return false;
+      injectedThisTurn.add(content);
+      return true;
+    },
+    resetInjectedContext: () => {
+      injectedThisTurn.clear();
+      // Queued messages still need deduplication across prompts/compaction.
+      for (const content of injectBuffer.content) injectedThisTurn.add(content);
+    },
+    resetSession: () => {
+      sessionVersion++;
+      clearTimeout(injectBuffer.timer);
+      injectBuffer.content = [];
+      injectBuffer.details = {};
+      injectBuffer.timer = undefined;
+      injectedThisTurn.clear();
+      shared.firedSessionStartKeys.clear();
+      shared.pendingUserPromptContext = undefined;
+      shared.stopHookActive = false;
+    },
+    dispose: () => {
+      disposed = true;
+      shared.resetSession();
+    },
+    captureContext: () => {
+      const version = sessionVersion;
+      const isActive = () => !disposed && version === sessionVersion;
+      return {
+        isActive,
+        injectHiddenContext: (...args) => {
+          if (isActive()) shared.injectHiddenContext(...args);
+        },
+      };
+    },
     getSessionId: (ctx: ExtensionContext) =>
       ctx.sessionManager.getSessionFile() ?? "ephemeral",
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
     injectHiddenContext: (content, details, triggerTurn = false, delivery = "nextTurn") => {
-      if (!claimInjectedContext(content)) return;
+      if (!shared.claimInjectedContext(content)) return;
       // A tool reminder must arrive before the next model step, without steering
       // or a debounce timer that can outlive the tool batch.
       if (delivery === "aside" && !triggerTurn) {
@@ -88,32 +107,28 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
         );
         return;
       }
-      _injectBuffer.content.push(content);
-      if (details) Object.assign(_injectBuffer.details, details);
-      clearTimeout(_injectBuffer.timer);
-      _injectBuffer.timer = setTimeout(() => {
-        const combined = _injectBuffer.content.join("\n\n");
+      injectBuffer.content.push(content);
+      if (details) Object.assign(injectBuffer.details, details);
+      clearTimeout(injectBuffer.timer);
+      injectBuffer.timer = setTimeout(() => {
+        if (disposed) return;
+        const combined = injectBuffer.content.join("\n\n");
+        const bufferedDetails = injectBuffer.details;
+        injectBuffer.content = [];
+        injectBuffer.details = {};
+        injectBuffer.timer = undefined;
         shared.pi.sendMessage(
           {
             customType: "omp-hooks-plus",
             content: combined,
             display: false,
-            details: _injectBuffer.details,
+            details: bufferedDetails,
           },
           triggerTurn ? { triggerTurn: true } : { deliverAs: "nextTurn" },
         );
-        _injectBuffer.content = [];
-        _injectBuffer.details = {};
-        _injectBuffer.timer = undefined;
       }, 50);
     },
-    settingsFor: async (ctx: ExtensionContext) => {
-      const projectTrusted = ctx.isProjectTrusted();
-      const loaded = await loadSettings(ctx.cwd, { projectTrusted });
-      shared.currentLoad = loaded;
-      shared.currentSettings = loaded.settings;
-      return loaded.settings;
-    },
+    settingsFor,
     buildToolResponse: (event) => {
       const toolResponse: Record<string, unknown> = {
         content: event.content,
@@ -132,7 +147,9 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
       return toolResponse;
     },
     triggerSessionStartHook: async (matcher, ctx) => {
-      await shared.settingsFor(ctx);
+      const delivery = shared.captureContext();
+      const settings = await shared.settingsFor(ctx);
+      if (!delivery.isActive()) return;
       const sessionId = shared.getSessionId(ctx);
       if (matcher === "compact") {
         // Compaction legitimately recurs within a session — unlike startup/resume,
@@ -140,7 +157,7 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
         // the per-turn content-dedup guard too: without it, injectHiddenContext's
         // claimInjectedContext would silently drop a second compaction's
         // byte-identical content as a "duplicate" of the first.
-        resetInjectedContext();
+        shared.resetInjectedContext();
       } else {
         const dedupeKey = `${matcher}:${sessionId}`;
         if (shared.firedSessionStartKeys.has(dedupeKey)) {
@@ -157,15 +174,14 @@ export function createHookContext(pi: ExtensionAPI): HookModuleContext {
           cwd: ctx.cwd,
           hookEventName: "SessionStart",
           source: matcher,
-          asyncContextSink: (content, details, triggerTurn) =>
-            shared.injectHiddenContext(content, details, triggerTurn),
+          asyncContextSink: delivery.injectHiddenContext,
         },
-        shared.currentSettings,
+        settings,
         (msg, type) => shared.notify(ctx, msg, type),
       );
 
       if (result.additionalContext) {
-        shared.injectHiddenContext(result.additionalContext, {
+        delivery.injectHiddenContext(result.additionalContext, {
           hookEventName: "SessionStart",
           source: matcher,
         });

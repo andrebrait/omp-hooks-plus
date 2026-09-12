@@ -1,6 +1,6 @@
 {
   "name": "omp-hooks-plus",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "description": "Install-once Claude Code hook compatibility for OMP",
   "type": "module",
   "keywords": [
@@ -33,7 +33,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "bun build src/omp-hooks.ts --target=bun --outdir=dist",
+    "build": "bun build src/omp-hooks.ts --target=bun --packages=external --outdir=dist",
+    "convert": "bun src/convert.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "bun run test && bun run typecheck && bun run build"

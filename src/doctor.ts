@@ -1,4 +1,5 @@
-import { getHookGroups, type LoadedSettings } from "./config";
+import { getHookGroups } from "./claude";
+import type { LoadedSettings } from "./config";
 import { hookDedupeKey } from "./hooks/shared";
 import type { HookEventName } from "./types";
 
