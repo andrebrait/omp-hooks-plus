@@ -81,7 +81,46 @@ test("supports manifest-free defaults, inline hooks, and plugin disable directiv
   expect((await loadConversionSource(inline)).settings.hooks?.pre_tool_use).toEqual([group("echo inline")]);
 });
 
-test("rejects silently discarded familiar hook fields and malformed group structure", async () => {
+test("accepts Caveman-shaped inline command hooks while omitting presentation metadata", async () => {
+  const root = tempRoot();
+  const command = 'node "${CLAUDE_PLUGIN_ROOT}/hooks/caveman.mjs" bootstrap';
+  put(root, ".claude-plugin/plugin.json", { name: "caveman", hooks: { SessionStart: [{
+    matcher: "startup|resume|clear|compact",
+    hooks: [{ type: "command", command, statusMessage: "credential-SENTINEL" }],
+  }] } });
+  const source = await loadConversionSource(root);
+  expect(source.settings.hooks?.SessionStart).toEqual([{
+    matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command }],
+  }]);
+  expect(source.report.hooks).toEqual([{
+    file: ".claude-plugin/plugin.json", pointer: "/hooks/SessionStart/0/hooks/0", event: "SessionStart", status: "supported",
+  }]);
+  expect(source.report.diagnostics.filter(({ level }) => level !== "info")).toEqual([]);
+  expect(source.report.diagnostics).toContainEqual(expect.objectContaining({
+    level: "info", file: ".claude-plugin/plugin.json", pointer: "/hooks/SessionStart/0/hooks/0/statusMessage",
+  }));
+  expect(JSON.stringify(source.report)).not.toContain("credential-SENTINEL");
+  expect(JSON.stringify(source.report)).not.toContain(command);
+});
+
+test("keeps Ponytail-shaped SubagentStart unsupported despite valid presentation metadata", async () => {
+  const root = tempRoot();
+  put(root, ".claude-plugin/plugin.json", { hooks: { SubagentStart: [{
+    matcher: "*",
+    hooks: [{ type: "command", command: 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/subagent-start.sh"', statusMessage: "Preparing guidance" }],
+  }], SessionStart: [group("echo bootstrap")] } });
+  const source = await loadConversionSource(root);
+  expect(source.report.hooks.map(({ event, status }) => [event, status])).toEqual([
+    ["SubagentStart", "unsupported"], ["SessionStart", "supported"],
+  ]);
+  expect(source.settings.hooks).toEqual({ SessionStart: [group("echo bootstrap")] });
+  expect(source.report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ level: "unsupported", pointer: "/hooks/SubagentStart" }),
+    expect.objectContaining({ level: "info", pointer: "/hooks/SubagentStart/0/hooks/0/statusMessage" }),
+  ]));
+});
+
+test("rejects invalid metadata, unknown execution fields, and malformed hook structure", async () => {
   const root = tempRoot();
   const file = put(root, "settings.json", { hooks: { Stop: [
     { hooks: [{ type: "command", command: "echo x", timeout: 0, if: false, async: "yes" }] },
@@ -89,10 +128,16 @@ test("rejects silently discarded familiar hook fields and malformed group struct
     { matcher: 5, hooks: [{ type: "http", url: "https://secret.invalid/token" }] },
     { future: true, hooks: [{ type: "agent", prompt: "secret prompt" }] },
     { hooks: false },
+    { hooks: [{ type: "command", command: "echo invalid metadata", statusMessage: false }] },
   ] } });
   const source = await loadConversionSource(file);
-  expect(source.report.hooks.map(({ status }) => status)).toEqual(["invalid", "unsupported", "invalid", "unsupported", "invalid"]);
+  expect(source.report.hooks.map(({ status }) => status)).toEqual(["invalid", "unsupported", "invalid", "unsupported", "invalid", "invalid"]);
   expect(source.settings.hooks).toBeUndefined();
+  expect(source.report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ level: "unsupported", pointer: "/hooks/Stop/1/hooks/0/env" }),
+    expect.objectContaining({ level: "info", pointer: "/hooks/Stop/1/hooks/0/statusMessage" }),
+    expect.objectContaining({ level: "error", pointer: "/hooks/Stop/5/hooks/0/statusMessage" }),
+  ]));
   expect(JSON.stringify(source.report)).not.toContain("credential-SENTINEL");
   expect(JSON.stringify(source.report)).not.toContain("secret.invalid");
 });
@@ -164,16 +209,38 @@ test("file inputs do not discover ambient files or rebase project-relative comma
   await expect(loadConversionSource(file, { sourceRoot: path.join(root, "hooks") })).rejects.toThrow();
 });
 
-test("pi entrypoints are reported but never imported and do not suppress Claude inventory", async () => {
+test("inventories Pi and OMP bindings without reuse, execution, value leaks, or suppressed Claude hooks", async () => {
   const root = tempRoot();
   const sentinel = path.join(root, "executed");
-  put(root, "package.json", { pi: { extensions: ["./evil.ts"] }, scripts: { prepare: `touch ${sentinel}` } });
-  put(root, "evil.ts", `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(sentinel)}, "bad");`);
+  const native = "./credential-SENTINEL-native.ts";
+  put(root, ".claude-plugin/plugin.json", {
+    pi: { extensions: [native] }, omp: { extensions: [native] },
+  });
+  put(root, "package.json", {
+    pi: { extensions: [native] }, omp: { extensions: [native] }, scripts: { prepare: `touch ${sentinel}` },
+  });
+  put(root, native, `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(sentinel)}, "bad");`);
   put(root, "hooks/hooks.json", { hooks: { Stop: [group(`touch ${sentinel}`)], Notification: [group("echo unsupported")] } });
   const source = await loadConversionSource(root);
   expect(existsSync(sentinel)).toBe(false);
   expect(source.report.hooks.map(({ status }) => status)).toEqual(["supported", "unsupported"]);
+  expect(source.settings.hooks?.Stop).toEqual([group(`touch ${sentinel}`)]);
+  expect(source.report.schemaVersion).toBe(1);
+  expect(source.report.conversionLevel).toBe("command-hook-adaptation");
+  expect(source.report.nativeBindings).toEqual([
+    { file: ".claude-plugin/plugin.json", pointer: "/pi", kind: "pi", status: "not-reused" },
+    { file: ".claude-plugin/plugin.json", pointer: "/pi/extensions/0", kind: "pi", status: "not-reused" },
+    { file: ".claude-plugin/plugin.json", pointer: "/omp", kind: "omp", status: "not-reused" },
+    { file: ".claude-plugin/plugin.json", pointer: "/omp/extensions/0", kind: "omp", status: "not-reused" },
+    { file: "package.json", pointer: "/pi", kind: "pi", status: "not-reused" },
+    { file: "package.json", pointer: "/pi/extensions/0", kind: "pi", status: "not-reused" },
+    { file: "package.json", pointer: "/omp", kind: "omp", status: "not-reused" },
+    { file: "package.json", pointer: "/omp/extensions/0", kind: "omp", status: "not-reused" },
+  ]);
   expect(source.report.diagnostics).toContainEqual(expect.objectContaining({ file: "package.json", pointer: "/pi/extensions/0", level: "info" }));
+  expect(JSON.stringify(source.report)).not.toContain("credential-SENTINEL");
+  expect(JSON.stringify(source.report)).not.toContain(sentinel);
+  expect(JSON.stringify(source.report)).not.toContain("touch");
 });
 
 test("unreadable and unparseable explicit roots throw instead of returning empty success", async () => {
@@ -197,9 +264,12 @@ test("non-hook settings are info-only and do not expose field values", async () 
   });
   const source = await loadConversionSource(file);
   expect(source.settings).toEqual({ disableAllHooks: true, hooks: { Stop: [group("echo selected")] } });
-  expect(source.report.diagnostics.map(({ level, pointer }) => [level, pointer])).toEqual([
-    ["info", "/permissions"], ["info", "/model"], ["info", "/env"],
-  ]);
+  expect(source.report.diagnostics).toEqual(expect.arrayContaining([
+    expect.objectContaining({ level: "info", pointer: "/permissions" }),
+    expect.objectContaining({ level: "info", pointer: "/model" }),
+    expect.objectContaining({ level: "info", pointer: "/env" }),
+  ]));
+  expect(source.report.diagnostics.filter(({ level }) => level !== "info")).toEqual([]);
   expect(JSON.stringify(source.report)).not.toContain("credential-SENTINEL");
 });
 
@@ -209,5 +279,5 @@ test("unrelated skill frontmatter is not excluded from copied resources", async 
   const source = await loadConversionSource(root);
   expect(source.declarationFiles).not.toContain(skill);
   expect(source.report.hooks).toEqual([]);
-  expect(source.report.diagnostics).toEqual([]);
+  expect(source.report.diagnostics.filter(({ level }) => level !== "info")).toEqual([]);
 });

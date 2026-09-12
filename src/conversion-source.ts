@@ -7,12 +7,19 @@ import type { Hook, HookGroup, HooksConfig, SettingsFile } from "./types";
 
 export type ConversionReport = {
   schemaVersion: 1;
+  conversionLevel: "command-hook-adaptation";
   source: { kind: "plugin" | "file"; name: string; entry: string };
   hooks: Array<{
     file: string;
     pointer: string;
     event: string;
     status: "supported" | "unsupported" | "invalid";
+  }>;
+  nativeBindings: Array<{
+    file: string;
+    pointer: string;
+    kind: "pi" | "omp";
+    status: "not-reused";
   }>;
   diagnostics: Array<{
     level: "error" | "unsupported" | "info";
@@ -37,6 +44,7 @@ const { YAML } = createRequire(import.meta.url)("bun") as { YAML: { parse(input:
 const supportedEvents: Record<string, true> = Object.fromEntries(HOOK_KEYS.map((key) => [key, true]));
 const hookFields: Record<string, true> = {
   type: true, command: true, args: true, if: true, timeout: true, shell: true, async: true, asyncRewake: true,
+  statusMessage: true,
 };
 const groupFields: Record<string, true> = { matcher: true, hooks: true };
 const configFields: Record<string, true> = { hooks: true, disableAllHooks: true, description: true, $schema: true };
@@ -75,9 +83,14 @@ export async function loadConversionSource(
   const relative = (file: string) => path.relative(root, file).split(path.sep).join("/") || ".";
   const report: ConversionReport = {
     schemaVersion: 1,
+    conversionLevel: "command-hook-adaptation",
     source: { kind, name: path.basename(kind === "plugin" ? root : entry, kind === "file" ? path.extname(entry) : ""), entry: relative(entry) },
     hooks: [],
-    diagnostics: [],
+    nativeBindings: [],
+    diagnostics: [{
+      level: "info",
+      message: "Command-hook adaptation only: native commands, recovery tools, provider integration, system-prompt ownership, and session state are not reproduced.",
+    }],
   };
   const declarationFiles = new Set<string>();
   const merged: SettingsFile = {};
@@ -167,6 +180,11 @@ export async function loadConversionSource(
       }
       if ("args" in value && (!Array.isArray(value.args) || !value.args.every((arg) => typeof arg === "string"))) {
         invalid(child(location, "args"), "Hook args must be an array of strings.");
+      }
+      if ("statusMessage" in value) {
+        const where = child(location, "statusMessage");
+        if (typeof value.statusMessage !== "string") invalid(where, "Hook statusMessage must be a string.");
+        else diagnostic("info", where, "Hook status presentation is not reproduced by the adapter.");
       }
       if ("if" in value && typeof value.if !== "string") invalid(child(location, "if"), "Hook if must be a string.");
       if ("timeout" in value && (typeof value.timeout !== "number" || !Number.isFinite(value.timeout) || value.timeout <= 0)) {
@@ -358,14 +376,20 @@ export async function loadConversionSource(
     }
   }
 
-  function pi(value: Record<string, unknown>, file: string): void {
-    if (!("pi" in value)) return;
-    const location = { file, pointer: "/pi" };
-    diagnostic("info", location, "Declared pi bindings are not imported or reused; disable overlapping original bindings before enabling generated hooks.");
-    if (isRecord(value.pi) && Array.isArray(value.pi.extensions)) {
-      value.pi.extensions.forEach((_entry: unknown, index: number) => {
-        diagnostic("info", child(child(location, "extensions"), index), "Declared pi extension entrypoint is not executed or used to suppress Claude hooks.");
-      });
+  function nativeBindings(value: Record<string, unknown>, file: string): void {
+    for (const kind of ["pi", "omp"] as const) {
+      if (!(kind in value)) continue;
+      const location = { file, pointer: `/${kind}` };
+      report.nativeBindings.push({ ...location, kind, status: "not-reused" });
+      diagnostic("info", location, `Declared ${kind} bindings are not imported or reused; disable overlapping original bindings before enabling generated hooks.`);
+      const binding = value[kind];
+      if (isRecord(binding) && Array.isArray(binding.extensions)) {
+        binding.extensions.forEach((_entry: unknown, index: number) => {
+          const entryLocation = child(child(location, "extensions"), index);
+          report.nativeBindings.push({ ...entryLocation, kind, status: "not-reused" });
+          diagnostic("info", entryLocation, `Declared ${kind} extension entrypoint is not executed or used to suppress Claude hooks.`);
+        });
+      }
     }
   }
 
@@ -384,7 +408,7 @@ export async function loadConversionSource(
       if (typeof manifest.name === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.name)) report.source.name = manifest.name;
       else diagnostic("error", child(manifestLocation, "name"), "Plugin name must contain only letters, digits, dots, underscores, or hyphens.");
     }
-    pi(manifest, manifestLocation.file);
+    nativeBindings(manifest, manifestLocation.file);
     if ("hooks" in manifest) {
       const location = child(manifestLocation, "hooks");
       if (isRecord(manifest.hooks)) config(manifest.hooks, location);
@@ -413,7 +437,7 @@ export async function loadConversionSource(
     const packagePath = await resolveFile("package.json", { file: "package.json", pointer: "" }, true);
     if (packagePath) {
       const value = await json(packagePath);
-      if (isRecord(value)) pi(value, "package.json");
+      if (isRecord(value)) nativeBindings(value, "package.json");
       else if (value !== undefined) diagnostic("error", { file: "package.json", pointer: "" }, "Package manifest must be a JSON object.");
     }
   }
