@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  SessionStopEventResult,
+} from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../claude";
 import { extractTextFromContent } from "../helpers";
 import type { HookModuleContext } from "../hook-context";
@@ -14,6 +17,14 @@ import {
   getStringField,
   runHooksParallel,
 } from "./shared";
+
+/**
+ * Reasons a blocking Stop hook reports when it gave none itself. Claude Code
+ * blocks on exit code 2 with stderr as the reason; an empty stderr still has to
+ * name what happened, because the host only continues on a non-empty reason.
+ */
+const STDERR_EXIT_REASON = "Stop hook exited with code 2";
+const JSON_BLOCK_REASON = "Continue requested by Stop hook";
 
 function findLastAssistantMessageText(messages: unknown[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -44,7 +55,18 @@ export async function triggerStopHooks(
 
   for (const { hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) {
-      notify?.(`Stop execution error: ${String(error)}`, "error");
+      if (!context.abortSignal?.aborted) {
+        notify?.(`Stop execution error: ${String(error)}`, "error");
+      }
+      continue;
+    }
+
+    // The pass was cancelled while this hook ran: its process group was killed
+    // and its output is not a verdict, so it neither blocks nor reports.
+    if (hookResult.aborted) continue;
+
+    if (hookResult.exitCode === 2) {
+      blockReasons.push(hookResult.stderr.trim() || STDERR_EXIT_REASON);
       continue;
     }
 
@@ -75,7 +97,7 @@ export async function triggerStopHooks(
 
       if (jsonOutput.decision === "block") {
         blockReasons.push(
-          getStringField(jsonOutput.reason) ?? "Continue requested by Stop hook",
+          getStringField(jsonOutput.reason) ?? JSON_BLOCK_REASON,
         );
       }
     }
@@ -90,68 +112,56 @@ export async function triggerStopHooks(
 
   if (blockReasons.length > 0) {
     result.blocked = true;
-    result.reason = blockReasons[0];
+    result.reason = blockReasons[0] ?? JSON_BLOCK_REASON;
   }
 
   return result;
 }
 
 export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
-  pi.on("agent_end", async (event, ctx) => {
+  pi.on("session_stop", async (event, ctx): Promise<SessionStopEventResult | undefined> => {
     const delivery = shared.captureContext();
+    // The host event is the authority for Stop metadata; the bridge keeps no copy
+    // of it between passes.
+    const hostLastAssistantMessage: { role?: string; content?: unknown } | undefined =
+      event.last_assistant_message;
     const result = await triggerStopHooks(
       {
-        sessionId: shared.getSessionId(ctx),
+        sessionId: event.session_id,
         cwd: ctx.cwd,
         hookEventName: "Stop",
-        transcriptPath: ctx.sessionManager.getSessionFile(),
-        stopHookActive: shared.stopHookActive,
-        lastAssistantMessage: findLastAssistantMessageText(event.messages),
-        asyncContextSink: delivery.injectHiddenContext,
+        transcriptPath: event.session_file ?? ctx.sessionManager.getSessionFile(),
+        stopHookActive: event.stop_hook_active,
+        lastAssistantMessage:
+          hostLastAssistantMessage?.role === "assistant"
+            ? extractTextFromContent(hostLastAssistantMessage.content)
+            : findLastAssistantMessageText(event.messages),
+        abortSignal: event.signal,
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
-    if (!delivery.isActive()) return;
+
+    // The settle pass that started this run is gone — the turn was aborted or the
+    // user switched sessions. Its verdict belongs to a turn nobody awaits, so it
+    // must not ask the host to continue.
+    if (!delivery.isActive() || event.signal.aborted) return;
 
     if (result.blocked) {
-      if (shared.stopHookActive) {
-        shared.notify(
-          ctx,
-          `Stop hook blocked again; loop guard suppressed another turn: ${result.reason ?? "no reason"}`,
-          "warning",
-        );
-        shared.stopHookActive = false;
-        return;
-      }
-
-      const continuationMessage = [result.reason, result.additionalContext]
-        .filter((value): value is string => Boolean(value && value.trim()))
-        .join("\n\n");
-
-      shared.stopHookActive = true;
-      shared.pi.sendMessage(
-        {
-          customType: "omp-hooks-plus",
-          content: continuationMessage,
-          display: false,
-          details: {
-            hookEventName: "Stop",
-            stopHookActive: true,
-          },
-        },
-        {
-          deliverAs: "followUp",
-          triggerTurn: true,
-        },
-      );
-      return;
-    } else if (result.additionalContext) {
-      delivery.injectHiddenContext(result.additionalContext, {
-        hookEventName: "Stop",
-      });
+      // A native block uses only `reason`; include all hook context there so
+      // the next model turn receives both the refusal and its supporting data.
+      return {
+        decision: "block",
+        reason: [result.reason ?? JSON_BLOCK_REASON, result.additionalContext]
+          .filter((value): value is string => Boolean(value))
+          .join("\n\n"),
+      };
     }
 
-    shared.stopHookActive = false;
+    if (result.additionalContext) {
+      return { continue: true, additionalContext: result.additionalContext };
+    }
+
+    return;
   });
 }
