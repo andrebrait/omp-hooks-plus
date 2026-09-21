@@ -40,4 +40,24 @@ describe("compatibility doctor", () => {
     expect(report).toContain("Claude plugin hooks are not loaded");
     expect(report).toContain("Duplicates suppressed: 1");
   });
+
+  test("counts SubagentStop hooks from both settings keys", () => {
+    const loaded: LoadedSettings = {
+      projectRoot: "/work/project",
+      projectTrusted: true,
+      mode: "claude-native",
+      sources: [{ scope: "user", path: "/home/me/.claude/settings.json" }],
+      sourcePaths: ["/home/me/.claude/settings.json"],
+      settings: {
+        hooks: {
+          SubagentStop: [{ hooks: [{ type: "command", command: "verify-report" }] }],
+          subagent_stop: [{ hooks: [{ type: "command", command: "audit-report" }] }],
+        },
+      },
+      warnings: [],
+      unsupported: [],
+    };
+
+    expect(formatDoctorReport(loaded)).toContain("SubagentStop: 2");
+  });
 });

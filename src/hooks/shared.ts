@@ -12,6 +12,11 @@ import type {
   ToolResultPatch,
 } from "../types";
 
+type HookMatchContext = Pick<
+  HookExecutionContext,
+  "hookEventName" | "toolName" | "toolInput"
+>;
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -55,7 +60,7 @@ function getToolInputMatchValue(
 }
 
 export function hookIfMatches(
-  context: HookExecutionContext,
+  context: HookMatchContext,
   condition: string | undefined,
 ): boolean {
   if (!condition) return true;
@@ -328,7 +333,7 @@ export type HookExecResult = {
  */
 export function collectMatchingHooks(
   groups: HookGroup[],
-  context: HookExecutionContext,
+  context: HookMatchContext,
   matcherValue: string,
   aliases: string[] = [],
   effectiveMatcherFn?: (group: HookGroup) => string | undefined,

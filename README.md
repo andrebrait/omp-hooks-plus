@@ -52,7 +52,7 @@ hooks is an array:   multiple custom hook-config files, merged together
 hooks is absent:     hooks/hooks.json under the plugin root, if present
 ```
 
-A custom hook-config file uses the standard `{ "hooks": { ... } }` wrapper. Only the nine event kinds this extension already supports are read from a plugin manifest ([see below](#supported-command-hooks)); other event kinds and non-`command` hook types (`http`, `prompt`, `agent`, `mcp_tool`) are reported under `/claude-compat doctor`'s unsupported list instead of silently dropped, and a malformed manifest or hook-config file is reported as a warning instead of silently ignored.
+A custom hook-config file uses the standard `{ "hooks": { ... } }` wrapper. Only the ten event kinds this extension already supports are read from a plugin manifest ([see below](#supported-command-hooks)); other event kinds and non-`command` hook types (`http`, `prompt`, `agent`, `mcp_tool`) are reported under `/claude-compat doctor`'s unsupported list instead of silently dropped, and a malformed manifest or hook-config file is reported as a warning instead of silently ignored.
 
 A plugin-scope hooks declaration cannot point outside its own plugin directory; a path that lexically escapes the root, or that resolves outside it through a symlink, is rejected with a warning and not loaded.
 
@@ -90,6 +90,7 @@ Supported event mappings include:
 - `PostToolUse` and `PostToolUseFailure`
 - `UserPromptSubmit`
 - `Stop`
+- `SubagentStop` (OMP's native `subagent_stop` pass, for task/subagent runs)
 
 Matching handlers are deduplicated by command, arguments, and environment and normally run in parallel. Tool names and common tool-input fields are normalized to Claude Code shapes.
 
@@ -103,7 +104,13 @@ The host owns continuation and `stop_hook_active`. It caps consecutive advisory 
 
 When a synchronous Stop block is accompanied by additional context, the bridge combines both into the native continuation reason. Asynchronous Stop commands cannot return a decision after the native pass has settled; their later output does not schedule another turn. Use a synchronous command when Stop must request continued work.
 
-Successful plain-text output never creates a notification. `SessionStart` and `UserPromptSubmit` add it to model context; `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, and `Stop` ignore it. Structured JSON handling and failed-hook diagnostics are unchanged.
+`SubagentStop` runs on OMP's native `subagent_stop` pass and returns that pass's result with the same mapping as `Stop`: `exit 2` (stderr, or a named fallback when stderr is empty) and `{"decision":"block","reason":…}` refuse the candidate terminal yield of a task/subagent run, and `additionalContext` alone asks for a continuation carrying that context. A refusal's reason carries every hook's accumulated context, because a native block carries only `reason`. The host re-drives the same child session, so a refused candidate is never accepted or published. A `SubagentStop` matcher names the child's agent type (`task`, `Explore`, a custom agent name), not a tool.
+
+Hook input splits identity, and the bridge keeps the halves apart. `session_id` and `transcript_path` are the **spawning** session's id and transcript, exactly as Claude Code reports them for this event; `agent_id`, `agent_type`, and `agent_transcript_path` describe the child run; `cwd` is the child's current working directory (a subagent may run in a different worktree than its parent), and `stop_hook_active` reports whether that child run already had a continuation. The child's identity is never substituted for the parent's: when the host reports no parent session id the pass is skipped with an error diagnostic, because a hook that keys state on `session_id` or reads `transcript_path` would otherwise act on the child session; when the spawning session has no transcript file, the field is omitted with a warning instead of being filled with the child's file.
+
+The bridge starts no turn of its own in the child run and retries nothing: the host owns the continuation, its `stop_hook_active` flag, and its cap on consecutive advisory continuations (an explicit `decision: "block"` is exempt and stays blocking until the host's own run limits stop the child). Asynchronous `SubagentStop` commands cannot return a decision after the pass has settled, and their later output is not injected into the child run. Use a synchronous command when the child must be sent back to work.
+
+Successful plain-text output never creates a notification. `SessionStart` and `UserPromptSubmit` add it to model context; `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, `Stop`, and `SubagentStop` ignore it. Structured JSON handling and failed-hook diagnostics are unchanged.
 
 Synchronous tool hooks deliver structured `additionalContext` before the next model step in the current user turn, including the first turn. Delivery does not interrupt other tools in the same batch. A `PreToolUse` reminder informs the model after that tool runs; use a deny decision when the hook must prevent execution. Asynchronous tool hooks retain their deferred delivery behavior.
 
@@ -113,9 +120,13 @@ The compatibility layer intentionally does not load:
 
 - organization-managed Claude policy hooks
 - non-command handlers such as `http`, `prompt`, `agent`, and `mcp_tool` (including from a plugin manifest)
-- hook event kinds beyond the nine listed [above](#supported-command-hooks) (including from a plugin manifest — Claude Code defines 30+ event kinds in total)
+- hook event kinds beyond the ten listed [above](#supported-command-hooks) (including from a plugin manifest — Claude Code defines 30+ event kinds in total)
 
 Plugin manifests and hook configuration files are re-read whenever hook settings are loaded, just like user settings. OMP caches installed-plugin roots separately; refresh plugin discovery after manually editing a plugin registry.
+
+`SubagentStop` needs a host that publishes the `subagent_stop` extension event and its `SubagentStopEvent`/`SubagentStopEventResult` types — the bridge imports them from `@oh-my-pi/pi-coding-agent` and adds no cast or fallback type. That host API is pending an upstream OMP release: no released OMP version provides it yet, so this package's peer range is deliberately unchanged until the release exists, and `SubagentStop` hooks are documented as unrunnable on a host without it. On such a host the extension still loads and every other event mapping behaves as documented; the `subagent_stop` handler is registered but never invoked, because OMP only dispatches events it emits.
+
+OMP's `subagent_stop` pass covers task/subagent runs that end at a candidate terminal `yield`. A kept-alive subagent's autonomous IRC wake turn is a different, conversational path and does not fire the pass, so a refusal cannot withhold a peer's reply there.
 
 Claude Code's user-plugin registry is opt-in, following OMP's `claude`/`claude-plugins` user-source settings. OMP-managed plugins do not require that opt-in. This requires OMP 18.1.16 or later, whose discovery API exposes each plugin's registry origin.
 
@@ -175,6 +186,8 @@ bun run build
 ```
 
 OMP loads the TypeScript source entry directly from `src/omp-hooks.ts`.
+
+`SubagentStop` is the one mapping whose types and event do not exist in a published `@oh-my-pi/pi-coding-agent` yet, so `bun run typecheck` and the SubagentStop tests need a dependency that publishes `subagent_stop`. Point the dev dependency at the paired OMP SDK build for local work — a `file:`/`link:` override or a packed tarball installed over the registry copy — and revert it to the registry version before publishing; the bridge's source import requirement is `SubagentStopEvent`, `SubagentStopEventResult`, and the `pi.on("subagent_stop", …)` overload from the package root.
 
 ## Upstream
 

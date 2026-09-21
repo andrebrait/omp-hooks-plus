@@ -51,11 +51,19 @@ export function buildHookInput(ctx: HookExecutionContext): object {
     };
   }
 
-  if (ctx.hookEventName === "Stop") {
+  if (ctx.hookEventName === "Stop" || ctx.hookEventName === "SubagentStop") {
     return {
       ...base,
       stop_hook_active: ctx.stopHookActive ?? false,
       last_assistant_message: ctx.lastAssistantMessage ?? "",
+      // Claude's SubagentStop payload splits identity: the base fields above
+      // stay the spawning session's, and these describe the child run. Absent
+      // values are omitted rather than filled in from the other side.
+      ...(ctx.agentId !== undefined ? { agent_id: ctx.agentId } : {}),
+      ...(ctx.agentType !== undefined ? { agent_type: ctx.agentType } : {}),
+      ...(ctx.agentTranscriptPath !== undefined
+        ? { agent_transcript_path: ctx.agentTranscriptPath }
+        : {}),
     };
   }
 

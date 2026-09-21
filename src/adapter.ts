@@ -3,7 +3,7 @@ import { createHookContext } from "./hook-context";
 import { registerCompactHooks } from "./hooks/compact-hooks";
 import { registerPromptHooks } from "./hooks/prompt-hooks";
 import { registerSessionHooks } from "./hooks/session-hooks";
-import { registerStopHooks } from "./hooks/stop-hooks";
+import { registerStopHooks, registerSubagentStopHooks } from "./hooks/stop-hooks";
 import { registerToolHooks } from "./hooks/tool-hooks";
 import type { SettingsFile } from "./types";
 export { findProjectRoot } from "./helpers";
@@ -17,5 +17,6 @@ export function registerHooks(
   registerCompactHooks(pi, shared);
   registerPromptHooks(pi, shared);
   registerStopHooks(pi, shared);
+  registerSubagentStopHooks(pi, shared);
   registerToolHooks(pi, shared);
 }
