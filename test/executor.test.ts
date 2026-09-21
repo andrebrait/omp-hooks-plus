@@ -93,10 +93,16 @@ test("read URLs stay opaque rather than becoming local filesystem aliases", () =
   const inputFor = (input: Record<string, unknown>) => buildHookInput({
     cwd: "/project", sessionId: "paths", hookEventName: "PreToolUse", toolName: "read", toolInput: input,
   }) as { tool_input: Record<string, unknown> };
-  const web = "https://example.com:8080/page:1-2";
-  expect(inputFor({ path: web, i: "Inspect page" }).tool_input).toEqual({
-    path: web, i: "Inspect page", url: web, prompt: "Inspect page",
-  });
+  for (const web of [
+    "https://example.com:8080/page:1-2",
+    "HTTP://example.com",
+    "https:/example.com/page",
+    "www.example.com/page:1-2",
+  ]) {
+    expect(inputFor({ path: web, i: "Inspect page" }).tool_input).toEqual({
+      path: web, i: "Inspect page", url: web, prompt: "Inspect page",
+    });
+  }
   for (const target of ["skill://example:1-2", "mcp://server/resource:raw", "ssh://host:2222/file:1-2"]) {
     expect(inputFor({ path: target }).tool_input).toEqual({ path: target });
   }

@@ -1,12 +1,17 @@
 import { spawn } from "node:child_process";
 import {
   isInternalUrlPath,
-  isReadableUrlPath,
   resolveReadPath,
   splitPathAndSelPreferringLiteralSync,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { toClaudeToolName } from "./claude";
 import type { Hook, HookExecutionContext } from "./types";
+
+// OMP 18.2.7 does not expose this helper through its bundled extension API.
+// Match pi-tui/src/tools/read.ts, including www. and collapsed HTTP slashes.
+function isReadableUrlPath(value: string): boolean {
+  return /^https?:\/\/?/i.test(value) || /^www\./i.test(value);
+}
 
 // ============================================================================
 // Hook executor
