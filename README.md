@@ -95,11 +95,17 @@ Matching handlers are deduplicated by command, arguments, and environment and no
 
 For local `Read` inputs, the shared adapter uses OMP's path helpers to resolve the Claude `file_path` alias, including embedded selectors such as `sample.ts:1-2`. Existing literal colon-containing filenames take precedence. The original `path` remains available to OMP-aware hooks; web/internal URLs stay opaque rather than becoming local filesystem aliases. `Edit` and `Write` paths are not interpreted as read selectors.
 
-`PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts terminate the complete process group on macOS and Linux. Repeated blocking from a `Stop` hook is suppressed after one follow-up turn.
+`PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts and cancelled passes terminate the complete process group on macOS and Linux.
+
+`Stop` runs on OMP's native `session_stop` pass and returns that pass's result: `exit 2` (stderr, or a named fallback when stderr is empty) and `{"decision":"block","reason":…}` ask the host to continue working, and `additionalContext` alone asks for a continuation carrying that context. Hook input comes from the event itself (`session_id`, `session_file`, `stop_hook_active`, `last_assistant_message`), never from bridge-owned state, and the bridge sends no follow-up message of its own.
+
+The host owns continuation and `stop_hook_active`. It caps consecutive advisory continuations; explicit `decision: "block"` results are exempt from that cap. Aborted or superseded passes discard their results. The host also limits how long it waits for a handler, independently of the hook command's timeout; exceeding that host budget does not itself cancel the command. A `Stop` hook that fails for any reason other than exit code 2 reports its exit code and stderr without continuing the turn.
+
+When a synchronous Stop block is accompanied by additional context, the bridge combines both into the native continuation reason. Asynchronous Stop commands cannot return a decision after the native pass has settled; their later output does not schedule another turn. Use a synchronous command when Stop must request continued work.
 
 Successful plain-text output never creates a notification. `SessionStart` and `UserPromptSubmit` add it to model context; `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PreCompact`, `PostCompact`, `SessionEnd`, and `Stop` ignore it. Structured JSON handling and failed-hook diagnostics are unchanged.
 
-Synchronous tool hooks deliver structured `additionalContext` before the next model step in the current user turn, including the first turn. Delivery does not interrupt other tools in the same batch. A `PreToolUse` reminder informs the model after that tool runs; use a deny decision when the hook must prevent execution. Asynchronous hooks retain their deferred delivery behavior.
+Synchronous tool hooks deliver structured `additionalContext` before the next model step in the current user turn, including the first turn. Delivery does not interrupt other tools in the same batch. A `PreToolUse` reminder informs the model after that tool runs; use a deny decision when the hook must prevent execution. Asynchronous tool hooks retain their deferred delivery behavior.
 
 ## Current limits
 

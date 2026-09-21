@@ -58,3 +58,51 @@ describe("Stop hook output", () => {
     expect(notifications[0]?.[0]).toContain("Status update failed");
   });
 });
+
+describe("Stop hook blocking exit codes", () => {
+  test("exit 2 blocks the session and carries stderr as the continuation reason", async () => {
+    const result = await triggerStopHooks(
+      context,
+      settingsFor("printf '%s' 'Verification failed: 2 tests red' >&2; exit 2"),
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain("Verification failed: 2 tests red");
+  });
+
+  test("exit 2 still blocks when another hook exits cleanly with plain text", async () => {
+    const result = await triggerStopHooks(
+      context,
+      settingsFor(
+        "printf '%s' 'Session status updated.'",
+        "printf '%s' 'Lint is red' >&2; exit 2",
+      ),
+    );
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason).toContain("Lint is red");
+  });
+
+  test("exit 2 without stderr still names a reason the host can continue with", async () => {
+    const result = await triggerStopHooks(context, settingsFor("exit 2"));
+
+    expect(result.blocked).toBe(true);
+    expect(result.reason?.trim()).toBeTruthy();
+  });
+
+  test("a block keeps the context other Stop hooks accumulated", async () => {
+    const result = await triggerStopHooks(
+      context,
+      settingsFor(
+        "printf '%s' '{\"additionalContext\":\"Review the failing assertion\"}'",
+        "printf '%s' '{\"decision\":\"block\",\"reason\":\"Tests failed\"}'",
+      ),
+    );
+
+    expect(result).toEqual({
+      blocked: true,
+      reason: "Tests failed",
+      additionalContext: "Review the failing assertion",
+    });
+  });
+});

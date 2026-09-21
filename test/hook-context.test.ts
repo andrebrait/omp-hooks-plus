@@ -1,5 +1,9 @@
 import { afterEach, expect, jest, test } from "bun:test";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  SessionStopEvent,
+} from "@oh-my-pi/pi-coding-agent";
 import { createHookContext, type HookModuleContext } from "../src/hook-context";
 import { registerToolHooks } from "../src/hooks/tool-hooks";
 import { registerPromptHooks } from "../src/hooks/prompt-hooks";
@@ -105,8 +109,21 @@ function pendingHook(eventName: "PreToolUse" | "UserPromptSubmit" | "Stop") {
   const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "session" }, ui: { notify: () => {} } };
   return {
     shared, messages,
-    run: (event: { type: string; [key: string]: unknown }) => handlers.get(event.type)!(event, ctx),
+    run: (event: object & { type: string }) => handlers.get(event.type)!(event, ctx),
     release: () => release({ hooks: { [eventName]: [{ hooks: [{ type: "command", command: `printf '%s' '{"decision":"block","reason":"fixture denial","hookSpecificOutput":{"permissionDecision":"deny","permissionDecisionReason":"fixture denial"}}'` }] }] } }),
+  };
+}
+
+function stopPass(overrides: Partial<SessionStopEvent> = {}): SessionStopEvent {
+  return {
+    type: "session_stop",
+    messages: [],
+    turn_id: 1,
+    session_id: "session",
+    session_file: "session",
+    stop_hook_active: false,
+    signal: new AbortController().signal,
+    ...overrides,
   };
 }
 
@@ -127,14 +144,23 @@ test("an in-flight prompt denial remains handled after adapter disposal", async 
   expect(race.shared.pendingUserPromptContext).toBeUndefined();
 });
 
-test("a stale Stop denial cannot schedule a follow-up in the new session", async () => {
+test("a stale Stop block cannot request a continuation in the new session", async () => {
   const race = pendingHook("Stop");
-  const result = race.run({ type: "agent_end", messages: [] });
+  const result = race.run(stopPass());
   race.shared.resetSession();
   race.release();
-  await result;
+  expect(await result).toBeUndefined();
   expect(race.messages).toEqual([]);
-  expect(race.shared.stopHookActive).toBe(false);
+});
+
+test("an aborted Stop pass drops the hook verdict instead of continuing", async () => {
+  const race = pendingHook("Stop");
+  const controller = new AbortController();
+  const result = race.run(stopPass({ signal: controller.signal }));
+  controller.abort();
+  race.release();
+  expect(await result).toBeUndefined();
+  expect(race.messages).toEqual([]);
 });
 
 test("each ephemeral session receives startup context once after a session reset", async () => {

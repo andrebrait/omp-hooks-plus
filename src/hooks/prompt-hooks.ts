@@ -107,7 +107,6 @@ export function registerPromptHooks(
     const delivery = shared.captureContext();
     shared.resetInjectedContext();
     shared.pendingUserPromptContext = undefined;
-    shared.stopHookActive = false;
 
     const result = await triggerUserPromptSubmitHooks(
       {
