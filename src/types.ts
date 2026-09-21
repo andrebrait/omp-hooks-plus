@@ -42,6 +42,7 @@ export type HooksConfig = {
   PostToolUseFailure?: HookGroup[];
   UserPromptSubmit?: HookGroup[];
   Stop?: HookGroup[];
+  SubagentStop?: HookGroup[];
   // Support lowercase aliases
   session_start?: HookGroup[];
   session_end?: HookGroup[];
@@ -52,6 +53,7 @@ export type HooksConfig = {
   post_tool_use_failure?: HookGroup[];
   user_prompt_submit?: HookGroup[];
   stop?: HookGroup[];
+  subagent_stop?: HookGroup[];
 };
 
 export type SettingsFile = {
@@ -68,7 +70,8 @@ export type HookEventName =
   | "PostToolUse"
   | "PostToolUseFailure"
   | "UserPromptSubmit"
-  | "Stop";
+  | "Stop"
+  | "SubagentStop";
 
 export type HookMatcherValue<T extends HookEventName> =
   T extends "SessionStart" ? SessionStartMatcher
@@ -93,6 +96,18 @@ export interface HookExecutionContext {
   // Stop fields
   stopHookActive?: boolean;
   lastAssistantMessage?: string;
+  // SubagentStop fields. The common `sessionId`/`transcriptPath` above carry the
+  // SPAWNING session for this event, exactly as Claude Code reports it; these
+  // carry the child run, and are never a substitute for the parent's identity.
+  agentId?: string;
+  agentType?: string;
+  agentTranscriptPath?: string;
+  /**
+   * Host signal for the pass that is running these hooks. Aborting it (turn
+   * abort, session switch, host handler budget) cancels the owned hook process
+   * groups and voids their verdicts.
+   */
+  abortSignal?: AbortSignal;
   // PreToolUse/PostToolUse/PostToolUseFailure fields
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -116,6 +131,19 @@ export type NotifyFn = (
   message: string,
   type: "info" | "error" | "warning",
 ) => void;
+
+/** Outcome of running one command hook process. */
+export type HookCommandResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  /**
+   * Set when the pass that owned this hook was cancelled. The process group is
+   * already terminated, so the output is not a hook verdict and must not be
+   * reported as a block or as a hook failure.
+   */
+  aborted?: boolean;
+};
 
 export type HookRunResult = {
   additionalContext?: string;

@@ -1,12 +1,17 @@
 import { spawn } from "node:child_process";
 import {
   isInternalUrlPath,
-  isReadableUrlPath,
   resolveReadPath,
   splitPathAndSelPreferringLiteralSync,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { toClaudeToolName } from "./claude";
-import type { Hook, HookExecutionContext } from "./types";
+import type { Hook, HookCommandResult, HookExecutionContext } from "./types";
+
+// OMP 18.2.7 does not expose this helper through its bundled extension API.
+// Match pi-tui/src/tools/read.ts, including www. and collapsed HTTP slashes.
+function isReadableUrlPath(value: string): boolean {
+  return /^https?:\/\/?/i.test(value) || /^www\./i.test(value);
+}
 
 // ============================================================================
 // Hook executor
@@ -46,11 +51,19 @@ export function buildHookInput(ctx: HookExecutionContext): object {
     };
   }
 
-  if (ctx.hookEventName === "Stop") {
+  if (ctx.hookEventName === "Stop" || ctx.hookEventName === "SubagentStop") {
     return {
       ...base,
       stop_hook_active: ctx.stopHookActive ?? false,
       last_assistant_message: ctx.lastAssistantMessage ?? "",
+      // Claude's SubagentStop payload splits identity: the base fields above
+      // stay the spawning session's, and these describe the child run. Absent
+      // values are omitted rather than filled in from the other side.
+      ...(ctx.agentId !== undefined ? { agent_id: ctx.agentId } : {}),
+      ...(ctx.agentType !== undefined ? { agent_type: ctx.agentType } : {}),
+      ...(ctx.agentTranscriptPath !== undefined
+        ? { agent_transcript_path: ctx.agentTranscriptPath }
+        : {}),
     };
   }
 
@@ -138,6 +151,12 @@ export function buildHookInput(ctx: HookExecutionContext): object {
 export const DEFAULT_COMMAND_HOOK_TIMEOUT_MS = 600_000;
 const USER_PROMPT_SUBMIT_TIMEOUT_MS = 30_000;
 const SESSION_END_TIMEOUT_MS = 1_500;
+/**
+ * Grace between SIGTERM and SIGKILL for a terminated hook. The kill window is
+ * never shortened by the pass settling: the escalation timer is only cleared
+ * once the owned process group has actually closed.
+ */
+const KILL_ESCALATION_MS = 1_000;
 
 export function getHookTimeoutMs(hook: Hook, eventName: HookExecutionContext["hookEventName"]): number {
   if (hook.timeout !== undefined) return hook.timeout * 1000;
@@ -151,9 +170,10 @@ export async function executeHook(
   input: object,
   cwd: string,
   timeoutMs: number = DEFAULT_COMMAND_HOOK_TIMEOUT_MS,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  abortSignal?: AbortSignal,
+): Promise<HookCommandResult> {
   const inputJson = JSON.stringify(input);
-  return executeCommandHook(hook, inputJson, cwd, timeoutMs);
+  return executeCommandHook(hook, inputJson, cwd, timeoutMs, abortSignal);
 }
 
 export function executeHookAsync(
@@ -161,10 +181,11 @@ export function executeHookAsync(
   input: object,
   cwd: string,
   timeoutMs: number,
-  onComplete: (result: { stdout: string; stderr: string; exitCode: number }) => void,
+  onComplete: (result: HookCommandResult) => void,
+  abortSignal?: AbortSignal,
 ): void {
   const inputJson = JSON.stringify(input);
-  void executeCommandHook(hook, inputJson, cwd, timeoutMs).then(onComplete);
+  void executeCommandHook(hook, inputJson, cwd, timeoutMs, abortSignal).then(onComplete);
 }
 
 function getCommandInvocation(hook: Hook): { command: string; args: string[] } {
@@ -184,12 +205,18 @@ function executeCommandHook(
   inputJson: string,
   cwd: string,
   timeoutMs: number,
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const { promise, resolve } = Promise.withResolvers<{
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-  }>();
+  abortSignal?: AbortSignal,
+): Promise<HookCommandResult> {
+  if (abortSignal?.aborted) {
+    return Promise.resolve({
+      stdout: "",
+      stderr: "",
+      exitCode: 1,
+      aborted: true,
+    });
+  }
+
+  const { promise, resolve } = Promise.withResolvers<HookCommandResult>();
   const invocation = getCommandInvocation(hook);
   const useProcessGroup =
     process.platform === "darwin" || process.platform === "linux";
@@ -202,11 +229,16 @@ function executeCommandHook(
 
   let stdout = "";
   let stderr = "";
+  // Diagnostics appended to stderr, in the order they were observed.
+  const notes: string[] = [];
   let settled = false;
+  let timedOut = false;
+  let aborted = false;
   let timeout: NodeJS.Timeout | undefined;
   let escalation: NodeJS.Timeout | undefined;
+  let forced: NodeJS.Timeout | undefined;
 
-  const signal = (name: NodeJS.Signals): void => {
+  const signalGroup = (name: NodeJS.Signals): void => {
     if (useProcessGroup && child.pid) {
       try {
         process.kill(-child.pid, name);
@@ -218,17 +250,46 @@ function executeCommandHook(
     child.kill(name);
   };
 
-  const finish = (result: {
-    stdout: string;
-    stderr: string;
-    exitCode: number;
-  }): void => {
+  const finish = (exitCode: number): void => {
     if (settled) return;
     settled = true;
     clearTimeout(timeout);
     clearTimeout(escalation);
-    resolve(result);
+    clearTimeout(forced);
+    abortSignal?.removeEventListener("abort", cancel);
+    resolve({
+      stdout,
+      stderr:
+        notes.length > 0 ? [stderr, ...notes].join("\n").trim() : stderr,
+      exitCode: timedOut ? 1 : exitCode,
+      ...(aborted ? { aborted: true } : {}),
+    });
   };
+
+  /**
+   * Terminate the owned process group, gracefully first. The kill timers stay
+   * armed until the group is gone: the pass that cancelled the hook may settle
+   * immediately, but a hook that outlived it must not keep running.
+   */
+  const terminate = (): void => {
+    signalGroup("SIGTERM");
+    escalation = setTimeout(() => {
+      signalGroup("SIGKILL");
+      // A descendant that left the group can hold the stdio pipes open forever;
+      // bound the wait so a cancelled pass is never stranded.
+      forced = setTimeout(() => finish(1), KILL_ESCALATION_MS);
+      forced.unref();
+    }, KILL_ESCALATION_MS);
+    escalation.unref();
+  };
+
+  const cancel = (): void => {
+    if (settled || aborted || timedOut) return;
+    aborted = true;
+    terminate();
+  };
+
+  abortSignal?.addEventListener("abort", cancel);
 
   child.stdout.on("data", (data) => {
     stdout += data.toString();
@@ -240,41 +301,32 @@ function executeCommandHook(
 
   child.stdin.on("error", (error) => {
     if ("code" in error && error.code === "EPIPE") return;
-    finish({
-      stdout,
-      stderr: `${stderr}\n${error.message}`.trim(),
-      exitCode: 1,
-    });
+    notes.push(error.message);
+    // A hook that is already being terminated settles once its group is gone, so
+    // a stray stdin error cannot clear the pending SIGKILL.
+    if (aborted || timedOut) return;
+    finish(1);
   });
   child.stdin.write(inputJson);
   child.stdin.end();
 
   timeout = setTimeout(() => {
-    signal("SIGTERM");
-    escalation = setTimeout(() => signal("SIGKILL"), 1_000);
-    escalation.unref();
-    finish({
-      stdout,
-      stderr: `${stderr}\n[omp-hooks-plus] Hook timed out`.trim(),
-      exitCode: 1,
-    });
+    if (settled || timedOut || aborted) return;
+    timedOut = true;
+    notes.push("[omp-hooks-plus] Hook timed out");
+    terminate();
   }, timeoutMs);
   timeout.unref();
 
+  // A cancelled or timed-out hook settles here, once its group is dead — never
+  // before, so the caller can rely on the process being gone when it resumes.
   child.on("close", (code) => {
-    finish({
-      stdout,
-      stderr,
-      exitCode: code ?? 1,
-    });
+    finish(code ?? 1);
   });
 
   child.on("error", (error) => {
-    finish({
-      stdout,
-      stderr: `${stderr}\n${error.message}`.trim(),
-      exitCode: 1,
-    });
+    notes.push(error.message);
+    finish(1);
   });
 
   return promise;

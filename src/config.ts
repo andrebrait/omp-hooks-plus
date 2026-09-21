@@ -392,7 +392,7 @@ export async function loadSettings(
     unsupported: [
       "Claude managed-policy hooks are not loaded",
       "Claude plugin hook types other than \"command\" (http, prompt, agent, mcp_tool) are not loaded",
-      "Claude plugin hook events outside SessionStart/SessionEnd/PreCompact/PostCompact/PreToolUse/PostToolUse/PostToolUseFailure/UserPromptSubmit/Stop are not loaded",
+      "Claude plugin hook events outside SessionStart/SessionEnd/PreCompact/PostCompact/PreToolUse/PostToolUse/PostToolUseFailure/UserPromptSubmit/Stop/SubagentStop are not loaded",
       ...pluginUnsupported,
     ],
     warnings,

@@ -17,6 +17,7 @@ export const HOOK_KEYS: Array<keyof HooksConfig> = [
   "PostToolUseFailure",
   "UserPromptSubmit",
   "Stop",
+  "SubagentStop",
   "session_start",
   "session_end",
   "pre_compact",
@@ -26,6 +27,7 @@ export const HOOK_KEYS: Array<keyof HooksConfig> = [
   "post_tool_use_failure",
   "user_prompt_submit",
   "stop",
+  "subagent_stop",
 ];
 
 
@@ -173,6 +175,11 @@ export function getHookGroups(
       ];
     case "Stop":
       return [...(hooks.Stop ?? []), ...(hooks.stop ?? [])];
+    case "SubagentStop":
+      return [
+        ...(hooks.SubagentStop ?? []),
+        ...(hooks.subagent_stop ?? []),
+      ];
     default:
       return [];
   }

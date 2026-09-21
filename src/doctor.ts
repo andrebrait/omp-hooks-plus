@@ -13,6 +13,7 @@ const EVENTS: HookEventName[] = [
   "PostToolUseFailure",
   "UserPromptSubmit",
   "Stop",
+  "SubagentStop",
 ];
 
 export function formatDoctorReport(loaded: LoadedSettings): string {

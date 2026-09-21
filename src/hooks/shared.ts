@@ -2,6 +2,7 @@ import { getHookGroups, matcherMatches, toClaudeToolName } from "../claude";
 import { buildHookInput, executeHook, executeHookAsync, getHookTimeoutMs } from "../executor";
 import type {
   Hook,
+  HookCommandResult,
   HookExecutionContext,
   HookEventName,
   HookGroup,
@@ -10,6 +11,11 @@ import type {
   SettingsFile,
   ToolResultPatch,
 } from "../types";
+
+type HookMatchContext = Pick<
+  HookExecutionContext,
+  "hookEventName" | "toolName" | "toolInput"
+>;
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -54,7 +60,7 @@ function getToolInputMatchValue(
 }
 
 export function hookIfMatches(
-  context: HookExecutionContext,
+  context: HookMatchContext,
   condition: string | undefined,
 ): boolean {
   if (!condition) return true;
@@ -206,54 +212,66 @@ export async function executeParsedHook(
   context: HookExecutionContext,
   eventName: HookEventName,
 ): Promise<{
-  hookResult: { stdout: string; stderr: string; exitCode: number };
+  hookResult: HookCommandResult;
   plainStdout: string;
   jsonOutput?: Record<string, unknown>;
   commonOutput?: CommonHookOutput;
 }> {
   const input = buildHookInput(context);
   const timeout = getHookTimeoutMs(hook, eventName);
+  const abortSignal = context.abortSignal;
 
   if (hook.async || hook.asyncRewake) {
-    executeHookAsync(hook, input, context.cwd, timeout, (hookResult) => {
-      const jsonOutput = hookResult.stdout
-        ? parseJsonOutput(hookResult.stdout)
-        : undefined;
-      const commonOutput = jsonOutput
-        ? extractCommonOutput(eventName, jsonOutput)
-        : undefined;
-      const additionalContext = jsonOutput
-        ? getStringField(
-            commonOutput?.hookSpecificOutput?.additionalContext,
-            jsonOutput.additionalContext,
-          )
-        : undefined;
+    executeHookAsync(
+      hook,
+      input,
+      context.cwd,
+      timeout,
+      (hookResult) => {
+        // A hook that finished after its pass was cancelled must not surface
+        // context into a turn nobody is waiting for.
+        if (abortSignal?.aborted) return;
 
-      if (additionalContext) {
-        context.asyncContextSink?.(additionalContext, {
-          hookEventName: eventName,
-          async: true,
-        });
-      }
+        const jsonOutput = hookResult.stdout
+          ? parseJsonOutput(hookResult.stdout)
+          : undefined;
+        const commonOutput = jsonOutput
+          ? extractCommonOutput(eventName, jsonOutput)
+          : undefined;
+        const additionalContext = jsonOutput
+          ? getStringField(
+              commonOutput?.hookSpecificOutput?.additionalContext,
+              jsonOutput.additionalContext,
+            )
+          : undefined;
 
-      if (hook.asyncRewake && hookResult.exitCode === 2) {
-        const reminder =
-          getStringField(
-            hookResult.stderr,
-            hookResult.stdout,
-            "Async hook exited with code 2",
-          ) ?? "Async hook exited with code 2";
-        context.asyncContextSink?.(
-          reminder,
-          {
+        if (additionalContext) {
+          context.asyncContextSink?.(additionalContext, {
             hookEventName: eventName,
             async: true,
-            asyncRewake: true,
-          },
-          true,
-        );
-      }
-    });
+          });
+        }
+
+        if (hook.asyncRewake && hookResult.exitCode === 2) {
+          const reminder =
+            getStringField(
+              hookResult.stderr,
+              hookResult.stdout,
+              "Async hook exited with code 2",
+            ) ?? "Async hook exited with code 2";
+          context.asyncContextSink?.(
+            reminder,
+            {
+              hookEventName: eventName,
+              async: true,
+              asyncRewake: true,
+            },
+            true,
+          );
+        }
+      },
+      abortSignal,
+    );
 
     return {
       hookResult: { stdout: "", stderr: "", exitCode: 0 },
@@ -261,7 +279,7 @@ export async function executeParsedHook(
     };
   }
 
-  const hookResult = await executeHook(hook, input, context.cwd, timeout);
+  const hookResult = await executeHook(hook, input, context.cwd, timeout, abortSignal);
   const jsonOutput = hookResult.stdout
     ? parseJsonOutput(hookResult.stdout)
     : undefined;
@@ -302,7 +320,7 @@ export type CollectedHook = { hook: Hook; originalIndex: number };
 export type HookExecResult = {
   hook: Hook;
   originalIndex: number;
-  hookResult: { stdout: string; stderr: string; exitCode: number };
+  hookResult: HookCommandResult;
   plainStdout: string;
   jsonOutput?: Record<string, unknown>;
   commonOutput?: CommonHookOutput;
@@ -315,7 +333,7 @@ export type HookExecResult = {
  */
 export function collectMatchingHooks(
   groups: HookGroup[],
-  context: HookExecutionContext,
+  context: HookMatchContext,
   matcherValue: string,
   aliases: string[] = [],
   effectiveMatcherFn?: (group: HookGroup) => string | undefined,

@@ -323,11 +323,17 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
       expect.objectContaining({ content: literal, display: false }),
     ]);
     await runner.emitBeforeProviderRequest({ messages: [] });
-    await runner.emit({ type: "agent_end", messages: [] });
-    expect(messages).toEqual([{
-      message: expect.objectContaining({ content: literal, display: false }),
-      options: { deliverAs: "followUp", triggerTurn: true },
-    }]);
+    const stop = await runner.emitSessionStop({
+      messages: [],
+      turn_id: 0,
+      session_id: "generated-stop",
+      stop_hook_active: false,
+      signal: new AbortController().signal,
+    });
+    // The host owns the continuation: generated hooks return the reason instead
+    // of queueing their own turn, and slash-like text stays content.
+    expect(stop).toEqual({ decision: "block", reason: literal });
+    expect(messages).toEqual([]);
     expect(await runner.emitBeforeAgentStart("synthetic continuation", undefined, [])).toBeUndefined();
     expect(readFileSync(path.join(project, "prompts.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual(["deny", "ordinary prompt"]);
   } finally {
