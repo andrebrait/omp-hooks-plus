@@ -93,6 +93,10 @@ const toolFailure = { ...toolResult, content: [{ type: "text", text: "boom" }], 
 const approval = { type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "bash", approvalMode: "ask" };
 const compacted = { type: "session_compact", compactionEntry: { summary: "S" } };
 const agentStart = { type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] };
+// OMP's native Stop pass, which carries the session's own id and file.
+const stopPass = (sessionId: string, file: string) => ({
+  type: "session_stop", messages: [], turn_id: 0, session_id: sessionId, session_file: file, stop_hook_active: false, signal: new AbortController().signal,
+});
 
 test("ctx.agent decides subagent identity, including a depth-0 /tan clone", () => {
   const { root, parent, child, grandchild } = sessions();
@@ -258,7 +262,7 @@ test("a top-level session reports its session id, never its file path, and its f
   await emit(toolCall, ctx);
   await emit(toolResult, ctx);
   await emit({ type: "session_before_compact", customInstructions: "" }, ctx);
-  await emit({ type: "agent_end", messages: [] }, ctx);
+  await emit(stopPass(PARENT_ID, parent), ctx);
   await emit({ type: "session_shutdown" }, ctx);
 
   const sent = records(log);

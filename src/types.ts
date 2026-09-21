@@ -110,6 +110,12 @@ export interface HookExecutionContext {
   // Stop fields
   stopHookActive?: boolean;
   lastAssistantMessage?: string;
+  /**
+   * Host signal for the pass that is running these hooks. Aborting it (turn
+   * abort, session switch, host handler budget) cancels the owned hook process
+   * groups and voids their verdicts.
+   */
+  abortSignal?: AbortSignal;
   // PreToolUse/PostToolUse/PostToolUseFailure fields
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -142,6 +148,19 @@ export type NotifyFn = (
   message: string,
   type: "info" | "error" | "warning",
 ) => void;
+
+/** Outcome of running one command hook process. */
+export type HookCommandResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  /**
+   * Set when the pass that owned this hook was cancelled. The process group is
+   * already terminated, so the output is not a hook verdict and must not be
+   * reported as a block or as a hook failure.
+   */
+  aborted?: boolean;
+};
 
 export type HookRunResult = {
   contexts?: HookContextEntry[];

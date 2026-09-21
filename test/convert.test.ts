@@ -328,11 +328,17 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
       }),
     ]);
     await runner.emitBeforeProviderRequest({ messages: [] });
-    await runner.emit({ type: "agent_end", messages: [] });
-    expect(messages).toEqual([{
-      message: expect.objectContaining({ content: literal, display: false }),
-      options: { deliverAs: "followUp", triggerTurn: true },
-    }]);
+    const stop = await runner.emitSessionStop({
+      messages: [],
+      turn_id: 0,
+      session_id: "generated-stop",
+      stop_hook_active: false,
+      signal: new AbortController().signal,
+    });
+    // The host owns the continuation: generated hooks return the reason instead
+    // of queueing their own turn, and slash-like text stays content.
+    expect(stop).toEqual({ decision: "block", reason: literal });
+    expect(messages).toEqual([]);
     expect(await runner.emitBeforeAgentStart("synthetic continuation", undefined, [])).toBeUndefined();
     expect(readFileSync(path.join(project, "prompts.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line))).toEqual(["deny", "ordinary prompt"]);
   } finally {
@@ -642,9 +648,11 @@ test("a blocking Stop hook's continuation is not reported as an idle prompt", as
     Notification: [{ hooks: [record] }],
   } }), { approximations: true });
   const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} } };
-  // OMP runs agent_end handlers in registration order, awaiting each.
+  // OMP settles session_stop first, then reports the continuation it scheduled as willContinue on agent_end.
   const emit = async (event: { type: string; [key: string]: unknown }) => { for (const handler of handlers.get(event.type) ?? []) await handler(event, ctx); };
-  await emit({ type: "agent_end", messages: [] });
+  const stop = { type: "session_stop", messages: [], turn_id: 0, session_id: "session", stop_hook_active: false, signal: new AbortController().signal };
+  expect(await handlers.get("session_stop")![0](stop, ctx)).toMatchObject({ decision: "block", reason: "Run the tests." });
+  await emit({ type: "agent_end", messages: [], willContinue: true });
   // Barrier: once this later detached hook has recorded, an idle record would have too.
   await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "read", approvalMode: "ask" });
   const deadline = Date.now() + 10_000;
