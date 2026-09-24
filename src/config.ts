@@ -51,6 +51,20 @@ const NATIVE_KEYS = keySet(HOOK_KEYS);
 const ALL_KEYS: Array<keyof HooksConfig> = [...HOOK_KEYS, ...APPROXIMATED_KEYS];
 
 const CLAUDE_PLUGINS_PROVIDER_ID = "claude-plugins";
+/** OMP does not expose a subagent's agent type: only untyped SubagentStart groups can run. */
+function dropTypedSubagentMatchers(hooks: HooksConfig | undefined, source: string, unsupported?: Set<string>): void {
+  const groups = hooks?.SubagentStart;
+  if (!hooks || !groups) return;
+  const kept = groups.filter((group) => {
+    const matcher = group.matcher?.trim();
+    if (!matcher || matcher === "*") return true;
+    unsupported?.add(`SubagentStart matcher "${group.matcher}" in ${source} is not supported: OMP does not expose a subagent's agent type`);
+    return false;
+  });
+  if (kept.length > 0) hooks.SubagentStart = kept;
+  else delete hooks.SubagentStart;
+}
+
 export function readSettingsFile(
   settingsPath: string,
   keys: KeySet = NATIVE_KEYS,
@@ -65,7 +79,9 @@ export function readSettingsFile(
         if (!Object.hasOwn(keys, event)) unsupported.add(`Hook event "${event}" in ${settingsPath} is not supported`);
       }
     }
-    return parseSettings(raw, ALL_KEYS.filter((key) => Object.hasOwn(keys, key)));
+    const settings = parseSettings(raw, ALL_KEYS.filter((key) => Object.hasOwn(keys, key)));
+    dropTypedSubagentMatchers(settings?.hooks, settingsPath, unsupported);
+    return settings;
   } catch {
     return undefined;
   }
@@ -154,7 +170,7 @@ function parsePluginHooksConfig(
   const hooks: HooksConfig = {};
   for (const [key, rawGroups] of Object.entries(value)) {
     if (!Object.hasOwn(keys, key)) {
-      unsupported.add(`Claude plugin hook event "${key}" is not supported`);
+      unsupported.add(`Claude plugin hook event "${key}" in ${sourceDescription} is not supported`);
       continue;
     }
     if (!Array.isArray(rawGroups)) {
@@ -166,6 +182,7 @@ function parsePluginHooksConfig(
       .filter((group): group is HookGroup => group !== undefined);
     if (groups.length > 0) hooks[key as keyof HooksConfig] = groups;
   }
+  dropTypedSubagentMatchers(hooks, sourceDescription, unsupported);
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 

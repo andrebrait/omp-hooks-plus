@@ -564,3 +564,50 @@ test("a slow Notification hook never delays the approval prompt or the next turn
   while ((existsSync(recorded) ? readFileSync(recorded, "utf8").trim().split("\n").length : 0) < 2 && Date.now() < deadline) await Bun.sleep(20);
   expect(readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line).notification_type).sort()).toEqual(["idle_prompt", "permission_prompt"]);
 });
+
+test("a blocking Stop hook's continuation is not reported as an idle prompt", async () => {
+  const { project } = fixture();
+  const recorded = path.join(project, "notified.jsonl");
+  const record = { type: "command", command: `{ cat; echo; } >> "${recorded}"` };
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  registerHooks(pi as never, async () => ({ hooks: {
+    Stop: [{ hooks: [{ type: "command", command: `printf '%s' '{"decision":"block","reason":"Run the tests."}'` }] }],
+    Notification: [{ hooks: [record] }],
+  } }), { approximations: true });
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  // OMP runs agent_end handlers in registration order, awaiting each.
+  const emit = async (event: { type: string; [key: string]: unknown }) => { for (const handler of handlers.get(event.type) ?? []) await handler(event, ctx); };
+  await emit({ type: "agent_end", messages: [] });
+  // Barrier: once this later detached hook has recorded, an idle record would have too.
+  await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "read", approvalMode: "ask" });
+  const deadline = Date.now() + 10_000;
+  while (!(existsSync(recorded) && readFileSync(recorded, "utf8").includes("permission_prompt")) && Date.now() < deadline) await Bun.sleep(20);
+  expect(readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line).notification_type)).toEqual(["permission_prompt"]);
+});
+
+test("a hook that names a plugin resource left out by --include cannot convert", async () => {
+  const { plugin, out } = fixture();
+  writeFileSync(path.join(plugin, "selected.txt"), "selected");
+  // fixture()'s hook runs node "${CLAUDE_PLUGIN_ROOT}/hooks/guard.cjs".
+  const result = await convertHooks(plugin, { out, include: ["selected.txt"] });
+  expect(result.exitCode).toBe(2);
+  expect(existsSync(path.join(out, "index.ts"))).toBe(false);
+  expect(result.report.diagnostics).toContainEqual(expect.objectContaining({
+    level: "unsupported",
+    message: "A hook command references hooks/guard.cjs through CLAUDE_PLUGIN_ROOT, but that resource is not copied; add --include hooks/guard.cjs",
+  }));
+  // Still not skippable: the hook itself would be emitted and fail at runtime.
+  expect((await convertHooks(plugin, { dryRun: true, include: ["selected.txt"], skipUnsupported: true })).exitCode).toBe(2);
+  expect((await convertHooks(plugin, { dryRun: true, include: ["hooks/guard.cjs"] })).exitCode).toBe(0);
+});
+
+test("a dangling resource symlink is reported as a missing target", async () => {
+  const { root, plugin } = fixture();
+  symlinkSync(path.join(root, "gone", "CLAUDE.md"), path.join(plugin, "AGENTS.md"));
+  const result = await convertHooks(plugin, { dryRun: true });
+  expect(result.report.diagnostics).toContainEqual({
+    level: "unsupported", file: "AGENTS.md",
+    message: "Resource symlink target does not exist; restore the target or remove the link before conversion",
+  });
+});

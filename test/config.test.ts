@@ -187,3 +187,13 @@ describe("events outside the native set", () => {
     ]);
   });
 });
+
+test("a typed SubagentStart matcher in a settings file is reported rather than loaded", async () => {
+  const root = tempRoot();
+  const home = path.join(root, "home");
+  const settingsPath = path.join(home, ".claude", "settings.json");
+  writeJson(settingsPath, { hooks: { SubagentStart: [{ matcher: "Explore", hooks: [hook("typed")] }, { matcher: "*", hooks: [hook("any")] }] } });
+  const loaded = await loadSettings(root, { home, approximate: true });
+  expect(getHookGroups(loaded.settings, "SubagentStart").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["any"]);
+  expect(loaded.unsupported).toContain(`SubagentStart matcher "Explore" in ${settingsPath} is not supported: OMP does not expose a subagent's agent type`);
+});

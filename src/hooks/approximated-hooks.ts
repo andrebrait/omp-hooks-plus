@@ -38,8 +38,9 @@ export function registerApproximatedHooks(pi: ExtensionAPI, shared: HookModuleCo
     notification(ctx, "permission_prompt", `Claude needs your permission to use ${toClaudeToolName(event.toolName)}`));
 
   pi.on("agent_end", (event, ctx) => {
-    // An automatic continuation or a finishing subagent is not waiting for the user.
-    if (event.willContinue || subagentSession(ctx)) return;
+    // An automatic continuation, a Stop-hook follow-up (the Stop handler runs first and
+    // sets stopHookActive when it blocks), or a finishing subagent is not waiting for the user.
+    if (event.willContinue || shared.stopHookActive || subagentSession(ctx)) return;
     notification(ctx, "idle_prompt", "Claude is waiting for your input");
   });
 

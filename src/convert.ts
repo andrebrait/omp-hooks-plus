@@ -6,6 +6,7 @@ import {
   closeSync,
   createReadStream,
   createWriteStream,
+  existsSync,
   fstatSync,
   openSync,
   linkSync,
@@ -108,7 +109,9 @@ function collectResources(source: ConversionSource, includes: string[]): { files
       return;
     }
     if (stat.isSymbolicLink()) {
-      source.report.diagnostics.push({ level: "unsupported", file: relative, message: "Resource symlinks require explicit resolution before conversion" });
+      source.report.diagnostics.push({ level: "unsupported", file: relative, message: existsSync(file)
+        ? "Resource symlinks require explicit resolution before conversion"
+        : "Resource symlink target does not exist; restore the target or remove the link before conversion" });
       return;
     }
     if (!within(realRoot, realpathSync(file))) throw new Error("A resource resolves outside the source root");
@@ -219,17 +222,32 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
   const destination = options.out ? destinationPath(options.out, source.root) : undefined;
   const resources = collectResources(source, options.include ?? []);
   const sourceReference = new RegExp(`${source.root.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=$|[/\\\\\\s"'\\x60;&|()<>])`);
-  // An emitted command that still names the original source root is never skippable.
-  let embedsSourceRoot = false;
+  // Emitted hooks that cannot work are never skippable: a command that still names the
+  // original source root, or one naming a CLAUDE_PLUGIN_ROOT resource that is not copied.
+  let brokenEmittedHook = false;
+  const copied = resources.files.map(file => file.relative);
+  const missing = new Set<string>();
   for (const groups of Object.values(source.settings.hooks ?? {})) {
     for (const group of groups ?? []) {
       for (const hook of group.hooks ?? []) {
-        if (sourceReference.test(hook.command) || hook.args?.some(argument => sourceReference.test(argument))) {
-          embedsSourceRoot = true;
+        const texts = [hook.command, ...(hook.args ?? [])];
+        if (texts.some(text => sourceReference.test(text))) {
+          brokenEmittedHook = true;
           source.report.diagnostics.push({ level: "unsupported", message: "A command embeds the original absolute source root; review its resource references before conversion" });
+        }
+        // Only literal references are checked; paths the script builds at runtime are not.
+        for (const text of texts) {
+          for (const [, reference] of text.matchAll(/\$\{?CLAUDE_PLUGIN_ROOT\}?\/([^\s"'`;&|()<>$]+)/g)) {
+            const relative = reference.replace(/\/+$/, "");
+            if (!copied.some(file => file === relative || file.startsWith(`${relative}/`))) missing.add(relative);
+          }
         }
       }
     }
+  }
+  for (const relative of missing) {
+    brokenEmittedHook = true;
+    source.report.diagnostics.push({ level: "unsupported", message: `A hook command references ${relative} through CLAUDE_PLUGIN_ROOT, but that resource is not copied; add --include ${relative}` });
   }
   source.report.diagnostics.push({ level: "info", message: "Commands retain their shell and active-project working directory. External executables, services and script dependencies remain required; arbitrary script dependency closure is not verified." });
   if (source.kind === "file") {
@@ -237,7 +255,7 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
   }
   const unsupported = source.report.diagnostics.some(item => item.level === "unsupported");
   const exitCode = source.report.diagnostics.some(item => item.level === "error") ? 1
-    : unsupported && (!options.skipUnsupported || embedsSourceRoot) ? 2 : 0;
+    : unsupported && (!options.skipUnsupported || brokenEmittedHook) ? 2 : 0;
   const report: ConvertResult["report"] = {
     ...source.report,
     activation: { policy: activation, projectTrustRequired: activation === "project-trusted" },
