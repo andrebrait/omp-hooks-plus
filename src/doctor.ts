@@ -13,6 +13,8 @@ const EVENTS: HookEventName[] = [
   "PostToolUseFailure",
   "UserPromptSubmit",
   "Stop",
+  "Notification",
+  "SubagentStart",
 ];
 
 export function formatDoctorReport(loaded: LoadedSettings): string {
@@ -60,6 +62,9 @@ export function formatDoctorReport(loaded: LoadedSettings): string {
     "",
     "Unsupported:",
     ...loaded.unsupported.map((item) => `  ${item}`),
+    ...(loaded.approximated.length > 0
+      ? ["", "Approximated (OMP_HOOKS_PLUS_APPROXIMATE=1):", ...loaded.approximated.map((item) => `  ${item}`)]
+      : []),
     "",
     `Duplicates suppressed: ${duplicatesSuppressed}`,
   ].join("\n");

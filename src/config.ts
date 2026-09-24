@@ -6,7 +6,7 @@ import {
   listClaudePluginRoots,
   type ClaudePluginRoot,
 } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
-import { HOOK_KEYS, parseHook, parseSettings } from "./claude";
+import { APPROXIMATED_KEYS, APPROXIMATIONS, HOOK_KEYS, parseHook, parseSettings } from "./claude";
 import { findProjectRoot } from "./helpers";
 import type {
   Hook,
@@ -32,6 +32,8 @@ export type LoadedSettings = {
   projectTrusted: boolean;
   warnings: string[];
   unsupported: string[];
+  /** How each enabled approximated event differs from Claude Code; empty unless approximating. */
+  approximated: string[];
 };
 
 export type LoadSettingsOptions = {
@@ -39,16 +41,31 @@ export type LoadSettingsOptions = {
   /** Override settings/data storage only; plugin registries follow OMP's active profile. */
   claudeConfigDir?: string;
   projectTrusted?: boolean;
+  /** Also load Claude events that only have an OMP approximation (see APPROXIMATIONS). */
+  approximate?: boolean;
 };
 
-const HOOK_KEY_SET: Record<string, true> = Object.fromEntries(HOOK_KEYS.map((key) => [key, true]));
+type KeySet = Record<string, true>;
+const keySet = (keys: Array<keyof HooksConfig>): KeySet => Object.fromEntries(keys.map((key) => [key, true]));
+const NATIVE_KEYS = keySet(HOOK_KEYS);
+const ALL_KEYS: Array<keyof HooksConfig> = [...HOOK_KEYS, ...APPROXIMATED_KEYS];
 
 const CLAUDE_PLUGINS_PROVIDER_ID = "claude-plugins";
-export function readSettingsFile(settingsPath: string): SettingsFile | undefined {
+export function readSettingsFile(
+  settingsPath: string,
+  keys: KeySet = NATIVE_KEYS,
+  unsupported?: Set<string>,
+): SettingsFile | undefined {
   if (!existsSync(settingsPath)) return undefined;
 
   try {
-    return parseSettings(JSON.parse(readFileSync(settingsPath, "utf8")));
+    const raw: unknown = JSON.parse(readFileSync(settingsPath, "utf8"));
+    if (unsupported && isRecord(raw) && isRecord(raw.hooks)) {
+      for (const event of Object.keys(raw.hooks)) {
+        if (!Object.hasOwn(keys, event)) unsupported.add(`Hook event "${event}" in ${settingsPath} is not supported`);
+      }
+    }
+    return parseSettings(raw, ALL_KEYS.filter((key) => Object.hasOwn(keys, key)));
   } catch {
     return undefined;
   }
@@ -60,7 +77,7 @@ function mergeHooks(
   const merged: HooksConfig = {};
   let hasAnyHook = false;
 
-  for (const key of HOOK_KEYS) {
+  for (const key of ALL_KEYS) {
     const groups = hookSets.flatMap((hooks) => hooks?.[key] ?? []);
 
     if (groups.length > 0) {
@@ -78,7 +95,7 @@ function mergeHooks(
 
 function attachHookEnv(hooks: HooksConfig, env: Record<string, string>): HooksConfig {
   const result: HooksConfig = {};
-  for (const key of HOOK_KEYS) {
+  for (const key of ALL_KEYS) {
     const groups = hooks[key];
     if (!groups) continue;
     result[key] = groups.map((group) => ({
@@ -128,6 +145,7 @@ function parsePluginHooksConfig(
   sourceDescription: string,
   warnings: string[],
   unsupported: Set<string>,
+  keys: KeySet,
 ): HooksConfig | undefined {
   if (!isRecord(value)) {
     warnings.push(`Malformed plugin hooks configuration in ${sourceDescription}: expected an object`);
@@ -135,7 +153,7 @@ function parsePluginHooksConfig(
   }
   const hooks: HooksConfig = {};
   for (const [key, rawGroups] of Object.entries(value)) {
-    if (!Object.hasOwn(HOOK_KEY_SET, key)) {
+    if (!Object.hasOwn(keys, key)) {
       unsupported.add(`Claude plugin hook event "${key}" is not supported`);
       continue;
     }
@@ -220,6 +238,7 @@ function resolvePluginRoot(
   projectRoot: string,
   warnings: string[],
   unsupported: Set<string>,
+  keys: KeySet,
 ): { hooks: HooksConfig; sourcePath: string } | undefined {
   const manifestPath = path.join(root.path, ".claude-plugin", "plugin.json");
   if (!existsSync(manifestPath)) return undefined;
@@ -280,7 +299,7 @@ function resolvePluginRoot(
   }
 
   const parsedConfigs = rawConfigs
-    .map((raw) => parsePluginHooksConfig(raw, sourcePath, warnings, unsupported))
+    .map((raw) => parsePluginHooksConfig(raw, sourcePath, warnings, unsupported, keys))
     .filter((config): config is HooksConfig => config !== undefined);
   const merged = mergeHooks(...parsedConfigs);
   if (!merged) return undefined;
@@ -329,10 +348,11 @@ export async function loadSettings(
   const settingsFiles: SettingsFile[] = [];
   const warnings: string[] = [];
   const pluginUnsupported = new Set<string>();
+  const keys = options.approximate ? keySet(ALL_KEYS) : NATIVE_KEYS;
   const addSource = (settingsPath: string, scope: SettingsScope): void => {
     if (!existsSync(settingsPath)) return;
     sources.push({ path: settingsPath, scope });
-    const settings = readSettingsFile(settingsPath);
+    const settings = readSettingsFile(settingsPath, keys, pluginUnsupported);
     if (settings) {
       settingsFiles.push(settings);
     } else {
@@ -368,7 +388,7 @@ export async function loadSettings(
     for (const root of roots) {
       if (root.scope === "project" && !projectTrusted) continue;
       if (root.scope === "user" && root.origin === "claude" && !foreignUserEnabled) continue;
-      const resolved = resolvePluginRoot(root, userClaudeDir, projectRoot, warnings, pluginUnsupported);
+      const resolved = resolvePluginRoot(root, userClaudeDir, projectRoot, warnings, pluginUnsupported, keys);
       if (resolved) {
         sources.push({ path: resolved.sourcePath, scope: "plugin" });
         settingsFiles.push({ hooks: resolved.hooks });
@@ -392,9 +412,14 @@ export async function loadSettings(
     unsupported: [
       "Claude managed-policy hooks are not loaded",
       "Claude plugin hook types other than \"command\" (http, prompt, agent, mcp_tool) are not loaded",
-      "Claude plugin hook events outside SessionStart/SessionEnd/PreCompact/PostCompact/PreToolUse/PostToolUse/PostToolUseFailure/UserPromptSubmit/Stop are not loaded",
+      options.approximate
+        ? "Claude plugin hook events outside SessionStart/SessionEnd/PreCompact/PostCompact/PreToolUse/PostToolUse/PostToolUseFailure/UserPromptSubmit/Stop and the approximated Notification/SubagentStart are not loaded"
+        : "Claude plugin hook events outside SessionStart/SessionEnd/PreCompact/PostCompact/PreToolUse/PostToolUse/PostToolUseFailure/UserPromptSubmit/Stop are not loaded",
       ...pluginUnsupported,
     ],
+    approximated: options.approximate
+      ? APPROXIMATED_KEYS.map((key) => `${key}: ${APPROXIMATIONS[key]}`)
+      : [],
     warnings,
   };
 }

@@ -147,3 +147,43 @@ describe("Claude settings hierarchy", () => {
   });
 
 });
+
+describe("events outside the native set", () => {
+  const userSettings = (home: string) => writeJson(path.join(home, ".claude", "settings.json"), {
+    hooks: {
+      Stop: [{ hooks: [hook("stop")] }],
+      Notification: [{ matcher: "idle_prompt", hooks: [hook("notify")] }],
+      SubagentStart: [{ hooks: [hook("brief")] }],
+      SubagentStop: [{ hooks: [hook("never")] }],
+    },
+  });
+
+  test("settings-file events that cannot run are reported, not silently dropped", async () => {
+    const root = tempRoot();
+    const home = path.join(root, "home");
+    userSettings(home);
+    const loaded = await loadSettings(root, { home });
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    for (const event of ["Notification", "SubagentStart", "SubagentStop"]) {
+      expect(loaded.unsupported).toContain(`Hook event "${event}" in ${settingsPath} is not supported`);
+    }
+    expect(getHookGroups(loaded.settings, "Notification")).toEqual([]);
+    expect(getHookGroups(loaded.settings, "Stop")).toHaveLength(1);
+  });
+
+  test("approximation loads Notification and SubagentStart and reports how each is approximated", async () => {
+    const root = tempRoot();
+    const home = path.join(root, "home");
+    userSettings(home);
+    const loaded = await loadSettings(root, { home, approximate: true });
+    const settingsPath = path.join(home, ".claude", "settings.json");
+    expect(getHookGroups(loaded.settings, "Notification").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["notify"]);
+    expect(getHookGroups(loaded.settings, "SubagentStart").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["brief"]);
+    expect(loaded.unsupported).toContain(`Hook event "SubagentStop" in ${settingsPath} is not supported`);
+    expect(loaded.unsupported.some((item) => item.includes("Notification") && item.includes("not supported"))).toBe(false);
+    expect(loaded.approximated).toEqual([
+      expect.stringContaining("Notification: Approximated: permission_prompt fires on OMP tool_approval_requested"),
+      expect.stringContaining("SubagentStart: Approximated: fires before the first run of an OMP subagent session"),
+    ]);
+  });
+});

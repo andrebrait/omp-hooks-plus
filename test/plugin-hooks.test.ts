@@ -13,6 +13,7 @@ import { disableProvider, enableProvider, isProviderEnabled } from "@oh-my-pi/pi
 import { getHookGroups } from "../src/claude";
 import { loadSettings } from "../src/config";
 import { triggerSessionHooks } from "../src/hooks/session-hooks";
+import extension from "../src/omp-hooks";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -449,4 +450,20 @@ describe("plugin hook execution", () => {
     expect(result.additionalContext).toBe("SAFE-CONTENT");
     expect(existsSync(path.join(repo, "INJECTED"))).toBe(false);
   });
+});
+
+test("OMP_HOOKS_PLUS_APPROXIMATE=1 enables approximated events in the on-the-fly extension", async () => {
+  const previous = process.env.OMP_HOOKS_PLUS_APPROXIMATE;
+  try {
+    for (const [value, expected] of [[undefined, false], ["0", false], ["1", true]] as const) {
+      if (value === undefined) delete process.env.OMP_HOOKS_PLUS_APPROXIMATE;
+      else process.env.OMP_HOOKS_PLUS_APPROXIMATE = value;
+      const events: string[] = [];
+      extension({ on: (name: string) => events.push(name), registerCommand: () => {}, sendMessage: () => {} } as never);
+      expect(events.includes("tool_approval_requested")).toBe(expected);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.OMP_HOOKS_PLUS_APPROXIMATE;
+    else process.env.OMP_HOOKS_PLUS_APPROXIMATE = previous;
+  }
 });

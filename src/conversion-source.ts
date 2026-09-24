@@ -2,7 +2,7 @@ import { constants, realpathSync, statSync } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { HOOK_KEYS, parseHook, parseSettings } from "./claude";
+import { APPROXIMATED_KEYS, APPROXIMATIONS, HOOK_KEYS, parseHook, parseSettings } from "./claude";
 import { isRecord } from "./type-guards";
 import type { Hook, HookGroup, HooksConfig, SettingsFile } from "./types";
 
@@ -14,7 +14,7 @@ export type ConversionReport = {
     file: string;
     pointer: string;
     event: string;
-    status: "supported" | "unsupported" | "invalid";
+    status: "supported" | "approximated" | "unsupported" | "invalid";
   }>;
   nativeBindings: Array<{
     file: string;
@@ -73,7 +73,7 @@ export function assertConversionRoot(source: Pick<ConversionSource, "root" | "ro
 /** Static inventory only: this function never discovers ambient settings or loads source code. */
 export async function loadConversionSource(
   input: string,
-  options: { sourceRoot?: string } = {},
+  options: { sourceRoot?: string; approximate?: boolean } = {},
 ): Promise<ConversionSource> {
   const entry = path.resolve(input);
   const inputStat = await stat(entry).catch(() => {
@@ -112,8 +112,9 @@ export async function loadConversionSource(
   const diagnostic = (level: "error" | "unsupported" | "info", location: Location, message: string) => {
     report.diagnostics.push({ level, ...location, message });
   };
-  const combine = (a: Status, b: Status): Status => a === "invalid" || b === "invalid"
-    ? "invalid" : a === "unsupported" || b === "unsupported" ? "unsupported" : "supported";
+  const rank: Record<Status, number> = { supported: 0, approximated: 1, unsupported: 2, invalid: 3 };
+  const combine = (a: Status, b: Status): Status => rank[a] >= rank[b] ? a : b;
+  const emitted = (status: Status) => status === "supported" || status === "approximated";
 
   async function resolveFile(declared: unknown, location: Location, optional = false): Promise<string | undefined> {
     if (typeof declared !== "string" || declared.trim() === "" || path.isAbsolute(declared) ||
@@ -237,8 +238,8 @@ export async function loadConversionSource(
         }
       }
     }
-    const parsed = status === "supported" ? parseHook(value) : undefined;
-    if (status === "supported" && !parsed) invalid(location, "Hook does not satisfy the supported command contract.");
+    const parsed = emitted(status) ? parseHook(value) : undefined;
+    if (emitted(status) && !parsed) invalid(location, "Hook does not satisfy the supported command contract.");
     report.hooks.push({ ...location, event, status });
     return parsed;
   }
@@ -252,7 +253,10 @@ export async function loadConversionSource(
     for (const [event, groups] of Object.entries(value)) {
       const eventLocation = child(location, event);
       let eventStatus: Status = "supported";
-      if (scoped || !Object.hasOwn(supportedEvents, event)) {
+      if (!scoped && options.approximate && Object.hasOwn(APPROXIMATIONS, event)) {
+        eventStatus = "approximated";
+        diagnostic("info", eventLocation, APPROXIMATIONS[event as keyof typeof APPROXIMATIONS]);
+      } else if (scoped || !Object.hasOwn(supportedEvents, event)) {
         eventStatus = "unsupported";
         diagnostic("unsupported", eventLocation, scoped
           ? "Skill and agent frontmatter hooks require scoped activation that this adapter cannot preserve."
@@ -273,6 +277,11 @@ export async function loadConversionSource(
           return;
         }
         let groupStatus = combine(eventStatus, fields(group, groupFields, groupLocation));
+        if (eventStatus === "approximated" && event === "SubagentStart" && typeof group.matcher === "string"
+            && group.matcher.trim() !== "" && group.matcher.trim() !== "*") {
+          groupStatus = combine(groupStatus, "unsupported");
+          diagnostic("unsupported", child(groupLocation, "matcher"), "OMP does not expose a subagent's agent type; a SubagentStart matcher cannot be approximated.");
+        }
         if ("matcher" in group && typeof group.matcher !== "string") {
           groupStatus = "invalid";
           diagnostic("error", child(groupLocation, "matcher"), "Hook matcher must be a string.");
@@ -317,10 +326,11 @@ export async function loadConversionSource(
     }
     const hooks = !wrapped ? inventory(value, location)
       : "hooks" in value ? inventory(value.hooks, child(location, "hooks")) : {};
-    const parsed = parseSettings({ hooks, ...(disable !== undefined ? { disableAllHooks: disable } : {}) });
+    const keys = options.approximate ? [...HOOK_KEYS, ...APPROXIMATED_KEYS] : HOOK_KEYS;
+    const parsed = parseSettings({ hooks, ...(disable !== undefined ? { disableAllHooks: disable } : {}) }, keys);
     if (parsed?.hooks) {
       merged.hooks ??= {};
-      for (const key of HOOK_KEYS) {
+      for (const key of keys) {
         const groups = parsed.hooks[key];
         if (groups) (merged.hooks[key] ??= []).push(...groups);
       }
