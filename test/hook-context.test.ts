@@ -21,22 +21,22 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-// Claude Code 2.1.277 wraps every hook's additional context as
-// `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`.
-const reminder = (hookName: string, text: string) =>
-  `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`;
+// OMP's native reminder shape (ttsr-tool-reminder.md): attributes on the tag, then OMP's own
+// closing sentence verbatim, then the hook's text.
+const reminder = (event: string, text: string, tool?: string) =>
+  `<system-reminder source="claude-hook" event="${event}"${tool ? ` tool="${tool}"` : ""}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
 const SESSION = { hookEventName: "SessionStart" } as const;
 const r = (text: string) => reminder("SessionStart", text);
 
-test("each context reaches the model as Claude Code's named hook reminder", () => {
+test("each context reaches the model as an OMP-native hook reminder", () => {
   const messages: string[] = [];
   const shared = context(messages);
   shared.injectHiddenContext("tool", { hookEventName: "PreToolUse", toolName: "bash", toolUseId: "1" }, false, "aside");
   shared.injectHiddenContext("failed", { hookEventName: "PostToolUseFailure", toolName: "read" }, false, "aside");
   shared.injectHiddenContext("boot", { hookEventName: "SessionStart", source: "startup" }, false, "aside");
   expect(messages).toEqual([
-    reminder("PreToolUse:Bash", "tool"),
-    reminder("PostToolUseFailure:Read", "failed"),
+    reminder("PreToolUse", "tool", "bash"),
+    reminder("PostToolUseFailure", "failed", "read"),
     reminder("SessionStart", "boot"),
   ]);
 });
@@ -69,7 +69,7 @@ test("an async tool hook's late context still names its event and tool", async (
   registerToolHooks(pi, shared);
   const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "async" }, ui: { notify: () => {} } };
   await handlers.get("tool_result")!({ toolName: "bash", toolCallId: "1", input: {}, content: [], isError: false }, ctx);
-  expect(await delivered).toBe(reminder("PostToolUse:Bash", "late"));
+  expect(await delivered).toBe(reminder("PostToolUse", "late", "bash"));
 });
 
 test("identical reminders are delivered once per turn, preserving distinct content", () => {

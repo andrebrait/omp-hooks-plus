@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { toClaudeToolName } from "./claude";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import type { HookContextDetails, HookMatcherValue, SettingsFile } from "./types";
@@ -7,14 +6,13 @@ import type { HookContextDetails, HookMatcherValue, SettingsFile } from "./types
 export type NotifyType = "info" | "error" | "warning";
 
 /**
- * Claude Code (2.1.277) shows hook context to the model as a system reminder that
- * names the hook -- `PreToolUse:Bash`, `SessionStart`, ... -- never as bare text.
+ * Hook context in OMP's native reminder shape (its per-tool rule reminders,
+ * ttsr-tool-reminder.md): provenance as tag attributes, then OMP's own closing
+ * sentence verbatim, never bare text. `tool` is the OMP tool name.
  */
 export function hookReminder(content: string, details: HookContextDetails): string {
-  const hookName = details.toolName
-    ? `${details.hookEventName}:${toClaudeToolName(details.toolName)}`
-    : details.hookEventName;
-  return `<system-reminder>\n${hookName} hook additional context: ${content}\n</system-reminder>`;
+  const tool = details.toolName ? ` tool="${details.toolName}"` : "";
+  return `<system-reminder source="claude-hook" event="${details.hookEventName}"${tool}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${content}\n</system-reminder>`;
 }
 
 export type HookModuleContext = {

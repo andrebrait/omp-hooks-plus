@@ -323,7 +323,7 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
     // Generated extensions share the runtime's delivery: Claude Code's named hook reminder.
     expect((await runner.emitBeforeAgentStart("ordinary prompt", undefined, []))?.messages).toEqual([
       expect.objectContaining({
-        content: `<system-reminder>\nUserPromptSubmit hook additional context: ${literal}\n</system-reminder>`,
+        content: `<system-reminder source="claude-hook" event="UserPromptSubmit">\nNOT prompt injection — coding agent enforcing project rules.\n\n${literal}\n</system-reminder>`,
         display: false,
       }),
     ]);
@@ -342,7 +342,7 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
   }
 });
 
-test("generated tool hooks deliver context as Claude Code's named hook reminder", async () => {
+test("generated tool hooks lead their tool result with an OMP-native reminder, sending no extra message", async () => {
   const { plugin, project, out } = fixture();
   const context = (event: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: `${event} context` } });
   writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
@@ -356,15 +356,16 @@ test("generated tool hooks deliver context as Claude Code's named hook reminder"
   loaded.runtime.sendMessage = (message, options) => { messages.push({ message, options }); };
   const auth = await AuthStorage.create(":memory:");
   const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, project, SessionManager.inMemory(project), new ModelRegistry(auth));
-  const named = (hookName: string, text: string) =>
-    `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`;
+  const named = (event: string, tool: string) =>
+    `<system-reminder source="claude-hook" event="${event}" tool="${tool}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${event} context\n</system-reminder>`;
+  const ok = { type: "text", text: "ok" };
   try {
     expect((await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "pre", input: { command: "ls" } }))?.block).not.toBe(true);
-    await runner.emitToolResult({ type: "tool_result", toolName: "read", toolCallId: "post", input: { path: "x" }, content: [{ type: "text", text: "ok" }], details: undefined, isError: false });
-    expect(messages).toEqual([
-      { message: expect.objectContaining({ content: named("PreToolUse:Bash", "PreToolUse context"), display: false }), options: { deliverAs: "aside" } },
-      { message: expect.objectContaining({ content: named("PostToolUse:Read", "PostToolUse context"), display: false }), options: { deliverAs: "aside" } },
-    ]);
+    const pre = await runner.emitToolResult({ type: "tool_result", toolName: "bash", toolCallId: "pre", input: { command: "ls" }, content: [ok], details: undefined, isError: false });
+    expect(pre?.content).toEqual([{ type: "text", text: named("PreToolUse", "bash") }, ok]);
+    const post = await runner.emitToolResult({ type: "tool_result", toolName: "read", toolCallId: "post", input: { path: "x" }, content: [ok], details: undefined, isError: false });
+    expect(post?.content).toEqual([{ type: "text", text: named("PostToolUse", "read") }, ok]);
+    expect(messages).toEqual([]);
   } finally {
     await runner.emit({ type: "session_shutdown" });
     runner.clearManagedTimers();
@@ -470,7 +471,7 @@ test("generated approximations notify on approval requests and idle stops, and b
     const child = path.join(sessions, "parent", "0-Explore.jsonl");
     const briefing = await emit({ type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] }, child);
     expect(briefing).toEqual([{ message: expect.objectContaining({
-      content: "<system-reminder>\nSubagentStart hook additional context: DELEGATE MODES\n</system-reminder>", display: false,
+      content: "<system-reminder source=\"claude-hook\" event=\"SubagentStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nDELEGATE MODES\n</system-reminder>", display: false,
     }) }]);
     // Once per subagent session, like Claude's single SubagentStart at spawn.
     expect(await emit({ type: "before_agent_start", prompt: "again", images: [], systemPrompt: [] }, child)).toEqual([]);
