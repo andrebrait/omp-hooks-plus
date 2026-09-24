@@ -85,7 +85,10 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       expect(completed.sort()).toEqual(["first", "second"]);
       expect(mock.calls).toHaveLength(2);
       const nextStep = JSON.stringify(mock.calls[1].context.messages);
-      expect(nextStep).toContain(reminder);
+      // Claude Code 2.1.277 renders hook context as a system reminder that names the
+      // hook and the tool: `<system-reminder>\n${hookName} hook additional context: …`.
+      const labelled = `<system-reminder>\n${hookEventName}:Bash hook additional context: ${reminder}\n</system-reminder>`;
+      expect(nextStep).toContain(JSON.stringify(labelled).slice(1, -1));
       expect(nextStep.split(reminder)).toHaveLength(2);
       expect(nextStep).toContain("completed first");
       expect(nextStep).toContain("completed second");

@@ -1,10 +1,21 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { toClaudeToolName } from "./claude";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
-import type { HookMatcherValue, SettingsFile } from "./types";
+import type { HookContextDetails, HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
 
+/**
+ * Claude Code (2.1.277) shows hook context to the model as a system reminder that
+ * names the hook -- `PreToolUse:Bash`, `SessionStart`, ... -- never as bare text.
+ */
+export function hookReminder(content: string, details: HookContextDetails): string {
+  const hookName = details.toolName
+    ? `${details.hookEventName}:${toClaudeToolName(details.toolName)}`
+    : details.hookEventName;
+  return `<system-reminder>\n${hookName} hook additional context: ${content}\n</system-reminder>`;
+}
 
 export type HookModuleContext = {
   pi: ExtensionAPI;
@@ -23,7 +34,7 @@ export type HookModuleContext = {
   notify: (ctx: ExtensionContext, msg: string, type: NotifyType) => void;
   injectHiddenContext: (
     content: string,
-    details: Record<string, unknown>,
+    details: HookContextDetails,
     triggerTurn?: boolean,
     delivery?: "nextTurn" | "aside",
   ) => void;
@@ -44,11 +55,12 @@ export function createHookContext(
   settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>,
 ): HookModuleContext {
   // Each adapter owns its own debounce queue and per-turn exact-content dedup.
+  // Dedup keys on the hook's raw text; the queue holds its labelled reminder.
   const injectBuffer: {
-    content: string[];
+    entries: { raw: string; content: string }[];
     details: Record<string, unknown>;
     timer: NodeJS.Timeout | undefined;
-  } = { content: [], details: {}, timer: undefined };
+  } = { entries: [], details: {}, timer: undefined };
   const injectedThisTurn = new Set<string>();
   let disposed = false;
   let sessionVersion = 0;
@@ -65,12 +77,12 @@ export function createHookContext(
     resetInjectedContext: () => {
       injectedThisTurn.clear();
       // Queued messages still need deduplication across prompts/compaction.
-      for (const content of injectBuffer.content) injectedThisTurn.add(content);
+      for (const { raw } of injectBuffer.entries) injectedThisTurn.add(raw);
     },
     resetSession: () => {
       sessionVersion++;
       clearTimeout(injectBuffer.timer);
-      injectBuffer.content = [];
+      injectBuffer.entries = [];
       injectBuffer.details = {};
       injectBuffer.timer = undefined;
       injectedThisTurn.clear();
@@ -96,8 +108,9 @@ export function createHookContext(
       ctx.sessionManager.getSessionFile() ?? "ephemeral",
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
-    injectHiddenContext: (content, details, triggerTurn = false, delivery = "nextTurn") => {
-      if (!shared.claimInjectedContext(content)) return;
+    injectHiddenContext: (raw, details, triggerTurn = false, delivery = "nextTurn") => {
+      if (!shared.claimInjectedContext(raw)) return;
+      const content = hookReminder(raw, details);
       // A tool reminder must arrive before the next model step, without steering
       // or a debounce timer that can outlive the tool batch.
       if (delivery === "aside" && !triggerTurn) {
@@ -107,14 +120,14 @@ export function createHookContext(
         );
         return;
       }
-      injectBuffer.content.push(content);
+      injectBuffer.entries.push({ raw, content });
       if (details) Object.assign(injectBuffer.details, details);
       clearTimeout(injectBuffer.timer);
       injectBuffer.timer = setTimeout(() => {
         if (disposed) return;
-        const combined = injectBuffer.content.join("\n\n");
+        const combined = injectBuffer.entries.map(entry => entry.content).join("\n\n");
         const bufferedDetails = injectBuffer.details;
-        injectBuffer.content = [];
+        injectBuffer.entries = [];
         injectBuffer.details = {};
         injectBuffer.timer = undefined;
         shared.pi.sendMessage(

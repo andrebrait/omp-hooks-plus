@@ -101,6 +101,8 @@ Successful plain-text output never creates a notification. `SessionStart` and `U
 
 Synchronous tool hooks deliver structured `additionalContext` before the next model step in the current user turn, including the first turn. Delivery does not interrupt other tools in the same batch. A `PreToolUse` reminder informs the model after that tool runs; use a deny decision when the hook must prevent execution. Asynchronous hooks retain their deferred delivery behavior.
 
+Hook context reaches the model the way Claude Code presents it: as a system reminder that names the hook, for example `<system-reminder>\nPreToolUse:Bash hook additional context: …\n</system-reminder>`. Tool events carry the Claude tool name (`PreToolUse:Read`, `PostToolUseFailure:Bash`); other events carry the event name (`SessionStart`, `UserPromptSubmit`, `Stop`). This applies equally to the on-the-fly adapter and to converted extensions, which bundle the same runtime.
+
 ## Current limits
 
 The compatibility layer intentionally does not load:

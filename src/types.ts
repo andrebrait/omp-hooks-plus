@@ -76,6 +76,12 @@ export type HookMatcherValue<T extends HookEventName> =
       : T extends "PreCompact" | "PostCompact" ? CompactTrigger
         : string;
 
+/** Provenance of delivered hook context; names the hook in the model-facing reminder. */
+export type HookContextDetails = {
+  hookEventName: HookEventName;
+  toolName?: string;
+} & Record<string, unknown>;
+
 export interface HookExecutionContext {
   sessionId: string;
   cwd: string;
@@ -103,7 +109,7 @@ export interface HookExecutionContext {
   // Async command hooks can deliver additionalContext after the foreground event.
   asyncContextSink?: (
     content: string,
-    details: Record<string, unknown>,
+    details: HookContextDetails,
     triggerTurn?: boolean,
   ) => void;
 }

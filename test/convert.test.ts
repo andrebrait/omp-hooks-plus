@@ -319,8 +319,12 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
     expect(await runner.emitInput("deny", undefined, "rpc")).toEqual({ handled: true });
     expect(await runner.emitBeforeAgentStart("deny", undefined, [])).toBeUndefined();
     expect(await runner.emitInput("ordinary prompt", undefined, "interactive")).toEqual({});
+    // Generated extensions share the runtime's delivery: Claude Code's named hook reminder.
     expect((await runner.emitBeforeAgentStart("ordinary prompt", undefined, []))?.messages).toEqual([
-      expect.objectContaining({ content: literal, display: false }),
+      expect.objectContaining({
+        content: `<system-reminder>\nUserPromptSubmit hook additional context: ${literal}\n</system-reminder>`,
+        display: false,
+      }),
     ]);
     await runner.emitBeforeProviderRequest({ messages: [] });
     await runner.emit({ type: "agent_end", messages: [] });
