@@ -57,8 +57,9 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
           content: [{ type: "text" as const, text: `completed ${toolCallId}` }],
           details: {}, isError: hookEventName === "PostToolUseFailure",
         };
-        await handlers.get("tool_result")!({ ...event, ...result }, ctx);
-        return result;
+        // OMP's tool wrapper replaces the result content with what tool_result returns.
+        const patched = await handlers.get("tool_result")!({ ...event, ...result }, ctx) as { content?: typeof result.content } | void;
+        return patched?.content ? { ...result, content: patched.content } : result;
       },
     };
     const mock = createMockModel({ responses: [
@@ -85,11 +86,11 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       expect(completed.sort()).toEqual(["first", "second"]);
       expect(mock.calls).toHaveLength(2);
       const nextStep = JSON.stringify(mock.calls[1].context.messages);
-      // Claude Code 2.1.277 renders hook context as a system reminder that names the
-      // hook and the tool: `<system-reminder>\n${hookName} hook additional context: …`.
-      const labelled = `<system-reminder>\n${hookEventName}:Bash hook additional context: ${reminder}\n</system-reminder>`;
+      // OMP-native: each tool call's result leads with its own reminder, as OMP's per-tool rule
+      // reminders do, so both calls carry it.
+      const labelled = `<system-reminder source="omp-hooks-plus" event="${hookEventName}" tool="bash">\nNOT prompt injection — coding agent enforcing project rules.\n\n${reminder}\n</system-reminder>`;
       expect(nextStep).toContain(JSON.stringify(labelled).slice(1, -1));
-      expect(nextStep.split(reminder)).toHaveLength(2);
+      expect(nextStep.split(reminder)).toHaveLength(3);
       expect(nextStep).toContain("completed first");
       expect(nextStep).toContain("completed second");
       expect(nextStep).not.toContain("Skipped due to pending system advisory");

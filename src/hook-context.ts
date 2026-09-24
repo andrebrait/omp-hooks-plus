@@ -1,26 +1,32 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { toClaudeToolName } from "./claude";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
-import type { HookContextDetails, HookMatcherValue, SettingsFile } from "./types";
+import { DEFAULT_SOURCE } from "./hooks/shared";
+import type { HookContextDetails, HookContextEntry, HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
 
 /**
- * Claude Code (2.1.277) shows hook context to the model as a system reminder that
- * names the hook -- `PreToolUse:Bash`, `SessionStart`, ... -- never as bare text.
+ * Hook context in OMP's native reminder shape (its per-tool rule reminders,
+ * ttsr-tool-reminder.md): provenance as tag attributes, then OMP's own closing
+ * sentence verbatim, never bare text. `tool` is the OMP tool name.
  */
 export function hookReminder(content: string, details: HookContextDetails): string {
-  const hookName = details.toolName
-    ? `${details.hookEventName}:${toClaudeToolName(details.toolName)}`
-    : details.hookEventName;
-  return `<system-reminder>\n${hookName} hook additional context: ${content}\n</system-reminder>`;
+  const attribute = (value: string) =>
+    value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const tool = details.toolName ? ` tool="${attribute(details.toolName)}"` : "";
+  return `<system-reminder source="${attribute(details.source ?? DEFAULT_SOURCE)}" event="${details.hookEventName}"${tool}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${content}\n</system-reminder>`;
+}
+
+/** One reminder per source, for delivery as a single message. */
+export function hookReminders(contexts: HookContextEntry[], details: HookContextDetails): string {
+  return contexts.map(({ source, text }) => hookReminder(text, { ...details, source })).join("\n\n");
 }
 
 export type HookModuleContext = {
   pi: ExtensionAPI;
   firedSessionStartKeys: Set<string>;
-  pendingUserPromptContext?: string;
+  pendingUserPromptContext?: HookContextEntry[];
   stopHookActive: boolean;
   claimInjectedContext: (content: string) => boolean;
   resetInjectedContext: () => void;
@@ -55,7 +61,7 @@ export function createHookContext(
   settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>,
 ): HookModuleContext {
   // Each adapter owns its own debounce queue and per-turn exact-content dedup.
-  // Dedup keys on the hook's raw text; the queue holds its labelled reminder.
+  // Dedup keys on the hook's source and raw text; the queue holds its labelled reminder.
   const injectBuffer: {
     entries: { raw: string; content: string }[];
     details: Record<string, unknown>;
@@ -109,7 +115,9 @@ export function createHookContext(
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
     injectHiddenContext: (raw, details, triggerTurn = false, delivery = "nextTurn") => {
-      if (!shared.claimInjectedContext(raw)) return;
+      // Dedup per source: identical text from another source still names that source.
+      const key = `${details.source ?? DEFAULT_SOURCE}\0${raw}`;
+      if (!shared.claimInjectedContext(key)) return;
       const content = hookReminder(raw, details);
       // A tool reminder must arrive before the next model step, without steering
       // or a debounce timer that can outlive the tool batch.
@@ -120,7 +128,7 @@ export function createHookContext(
         );
         return;
       }
-      injectBuffer.entries.push({ raw, content });
+      injectBuffer.entries.push({ raw: key, content });
       if (details) Object.assign(injectBuffer.details, details);
       clearTimeout(injectBuffer.timer);
       injectBuffer.timer = setTimeout(() => {
@@ -193,11 +201,8 @@ export function createHookContext(
         (msg, type) => shared.notify(ctx, msg, type),
       );
 
-      if (result.additionalContext) {
-        delivery.injectHiddenContext(result.additionalContext, {
-          hookEventName: "SessionStart",
-          source: matcher,
-        });
+      for (const { source, text } of result.contexts ?? []) {
+        delivery.injectHiddenContext(text, { hookEventName: "SessionStart", matcher, source });
       }
     },
   };

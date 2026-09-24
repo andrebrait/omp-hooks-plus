@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { toClaudeToolName } from "../claude";
-import { hookReminder, type HookModuleContext } from "../hook-context";
+import { hookReminders, type HookModuleContext } from "../hook-context";
 import { triggerSimpleHooks } from "./shared";
 
 /** OMP writes a subagent's session to `<parent>/<agentId>.jsonl` beside `<parent>.jsonl`. */
@@ -57,10 +57,10 @@ export function registerApproximatedHooks(pi: ExtensionAPI, shared: HookModuleCo
       agentId: path.basename(file, ".jsonl"),
       asyncContextSink: delivery.injectHiddenContext,
     }, await shared.settingsFor(ctx), (msg, type) => shared.notify(ctx, msg, type));
-    if (!delivery.isActive() || !result.additionalContext) return;
+    if (!delivery.isActive() || !result.contexts) return;
     const details = { hookEventName: "SubagentStart" } as const;
     return {
-      message: { customType: "omp-hooks-plus", content: hookReminder(result.additionalContext, details), display: false, details },
+      message: { customType: "omp-hooks-plus", content: hookReminders(result.contexts, details), display: false, details },
     };
   });
 }

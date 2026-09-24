@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups, toClaudeToolName } from "../claude";
 import { extractErrorFromContent } from "../helpers";
-import type { HookModuleContext } from "../hook-context";
+import { hookReminder, type HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -10,7 +10,7 @@ import type {
   SettingsFile,
 } from "../types";
 import {
-  appendAdditionalContext,
+  addContext,
   collectMatchingHooks,
   type HookExecResult,
   extractToolResultPatch,
@@ -52,7 +52,7 @@ export async function triggerPreToolUseHooks(
   }
 
   // If not stopped, second pass: collect deny (deny-wins), updatedInput (merge in order), context
-  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
+  for (const { hook, hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
@@ -105,10 +105,7 @@ export async function triggerPreToolUseHooks(
         hookSpecific?.additionalContext,
         jsonOutput.additionalContext,
       );
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        additionalContext,
-      );
+      result.contexts = addContext(result.contexts, hook, additionalContext);
     }
 
     if (hookResult.exitCode !== 0 && hookResult.exitCode !== 2) {
@@ -134,7 +131,7 @@ export async function triggerPreToolUseHooks(
  * Merge logic for PostToolUse / PostToolUseFailure:
  * - stopProcessing wins over everything (collected first)
  * - first non-undefined content/details/isError wins (earlier-defined hook)
- * - additionalContext concatenated in config order
+ * - context entries appended in config order, per source
  */
 function mergePostToolUseResults(
   results: HookExecResult[],
@@ -155,7 +152,7 @@ function mergePostToolUseResults(
   }
 
   // Second pass: patch + context in order
-  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
+  for (const { hook, hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
@@ -172,10 +169,7 @@ function mergePostToolUseResults(
         jsonOutput.decision === "block" ? jsonOutput.reason : undefined,
       );
 
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        additionalContext,
-      );
+      result.contexts = addContext(result.contexts, hook, additionalContext);
 
       const patch = extractToolResultPatch("PostToolUse", jsonOutput);
       if (result.content === undefined && patch.content !== undefined) {
@@ -242,6 +236,12 @@ function replacementContent(value: unknown) {
 }
 
 export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
+  // Synchronous tool-hook context leads that call's own result, the way OMP's per-tool
+  // rule reminders do: every qualifying call carries its reminder, next to its output.
+  const pendingPre = new Map<string, { reminders: string[]; isActive: () => boolean }>();
+  // Every tool result arrives before its run ends; a call without one (aborted) is dropped here.
+  pi.on("agent_end", () => pendingPre.clear());
+
   pi.on("tool_call", async (event, ctx) => {
     const delivery = shared.captureContext();
     const result = await triggerPreToolUseHooks(
@@ -294,109 +294,59 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       }
     }
 
-
-    if (result.additionalContext) {
-      delivery.injectHiddenContext(result.additionalContext, {
-        hookEventName: "PreToolUse",
-        toolName: event.toolName,
-        toolUseId: event.toolCallId,
-      }, false, "aside");
+    if (result.contexts) {
+      pendingPre.set(event.toolCallId, {
+        reminders: result.contexts.map(({ source, text }) =>
+          hookReminder(text, { hookEventName: "PreToolUse", toolName: event.toolName, source })),
+        isActive: delivery.isActive,
+      });
     }
   });
 
   pi.on("tool_result", async (event, ctx) => {
     const delivery = shared.captureContext();
-    if (event.isError) {
-      const result = await triggerPostToolUseFailureHooks(
-        event.toolName,
-        {
-          sessionId: shared.getSessionId(ctx),
-          cwd: ctx.cwd,
-          hookEventName: "PostToolUseFailure",
-          transcriptPath: ctx.sessionManager.getSessionFile(),
-          toolName: event.toolName,
-          toolInput: event.input as Record<string, unknown>,
-          toolUseId: event.toolCallId,
-          error: extractErrorFromContent(event.content),
-          isInterrupt: false,
-          asyncContextSink: delivery.injectHiddenContext,
-        },
-        await shared.settingsFor(ctx),
-        (msg, type) => shared.notify(ctx, msg, type),
-      );
-
-      if (result.additionalContext) {
-        delivery.injectHiddenContext(result.additionalContext, {
-          hookEventName: "PostToolUseFailure",
-          toolName: event.toolName,
-          toolUseId: event.toolCallId,
-        }, false, "aside");
-      }
-
-      if (result.stopProcessing && delivery.isActive()) {
-        ctx.abort?.();
-      }
-
-      if (
-        result.content !== undefined ||
-        result.details !== undefined ||
-        result.isError !== undefined
-      ) {
-        return {
-          content:
-            result.content === undefined
-              ? event.content
-              : replacementContent(result.content),
-          details: result.details ?? event.details,
-          isError: result.isError ?? event.isError,
-        };
-      }
-
-      return;
-    }
-
-    const result = await triggerPostToolUseHooks(
-      event.toolName,
-      {
-        sessionId: shared.getSessionId(ctx),
-        cwd: ctx.cwd,
-        hookEventName: "PostToolUse",
-        transcriptPath: ctx.sessionManager.getSessionFile(),
-        toolName: event.toolName,
-        toolInput: event.input as Record<string, unknown>,
-        toolUseId: event.toolCallId,
-        toolResponse: shared.buildToolResponse(event),
-        asyncContextSink: delivery.injectHiddenContext,
-      },
-      await shared.settingsFor(ctx),
-      (msg, type) => shared.notify(ctx, msg, type),
-    );
-
-    if (result.additionalContext) {
-      delivery.injectHiddenContext(result.additionalContext, {
-        hookEventName: "PostToolUse",
-        toolName: event.toolName,
-        toolUseId: event.toolCallId,
-      }, false, "aside");
-    }
+    const pre = pendingPre.get(event.toolCallId);
+    pendingPre.delete(event.toolCallId);
+    const hookEventName = event.isError ? "PostToolUseFailure" : "PostToolUse";
+    const context: HookExecutionContext = {
+      sessionId: shared.getSessionId(ctx),
+      cwd: ctx.cwd,
+      hookEventName,
+      transcriptPath: ctx.sessionManager.getSessionFile(),
+      toolName: event.toolName,
+      toolInput: event.input as Record<string, unknown>,
+      toolUseId: event.toolCallId,
+      asyncContextSink: delivery.injectHiddenContext,
+      ...(event.isError
+        ? { error: extractErrorFromContent(event.content), isInterrupt: false }
+        : { toolResponse: shared.buildToolResponse(event) }),
+    };
+    const settings = await shared.settingsFor(ctx);
+    const notify: NotifyFn = (msg, type) => shared.notify(ctx, msg, type);
+    const result = event.isError
+      ? await triggerPostToolUseFailureHooks(event.toolName, context, settings, notify)
+      : await triggerPostToolUseHooks(event.toolName, context, settings, notify);
 
     if (result.stopProcessing && delivery.isActive()) {
       ctx.abort?.();
     }
 
-    if (
-      result.content !== undefined ||
-      result.details !== undefined ||
-      result.isError !== undefined
-    ) {
-      return {
-        content:
-          result.content === undefined
-            ? event.content
-            : replacementContent(result.content),
-        details: result.details ?? event.details,
-        isError: result.isError ?? event.isError,
-      };
-    }
+    const reminders = [
+      ...(pre?.isActive() ? pre.reminders : []),
+      ...(delivery.isActive()
+        ? (result.contexts ?? []).map(({ source, text }) =>
+            hookReminder(text, { hookEventName, toolName: event.toolName, source }))
+        : []),
+    ];
+    const patched = result.content !== undefined || result.details !== undefined || result.isError !== undefined;
+    if (!patched && reminders.length === 0) return;
+    return {
+      content: [
+        ...reminders.map((text) => ({ type: "text" as const, text })),
+        ...(result.content === undefined ? event.content : replacementContent(result.content)),
+      ],
+      details: result.details ?? event.details,
+      isError: result.isError ?? event.isError,
+    };
   });
 }

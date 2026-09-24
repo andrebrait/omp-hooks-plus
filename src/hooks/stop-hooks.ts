@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../claude";
 import { extractTextFromContent } from "../helpers";
-import { hookReminder, type HookModuleContext } from "../hook-context";
+import { hookReminders, type HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -9,7 +9,7 @@ import type {
   StopResult,
 } from "../types";
 import {
-  appendAdditionalContext,
+  addContext,
   collectMatchingHooks,
   getStringField,
   runHooksParallel,
@@ -42,7 +42,7 @@ export async function triggerStopHooks(
   const result: StopResult = { blocked: false };
   const blockReasons: string[] = [];
 
-  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
+  for (const { hook, hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) {
       notify?.(`Stop execution error: ${String(error)}`, "error");
       continue;
@@ -54,10 +54,7 @@ export async function triggerStopHooks(
         jsonOutput.additionalContext,
       );
 
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        additionalContext,
-      );
+      result.contexts = addContext(result.contexts, hook, additionalContext);
 
       if (commonOutput?.systemMessage) {
         notify?.(commonOutput.systemMessage, "warning");
@@ -127,9 +124,7 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
 
       // Claude Code delivers the block reason as Stop feedback and any additional
       // context beside it as its own named hook reminder.
-      const context = result.additionalContext?.trim()
-        ? hookReminder(result.additionalContext, { hookEventName: "Stop" })
-        : undefined;
+      const context = result.contexts ? hookReminders(result.contexts, { hookEventName: "Stop" }) : undefined;
       const continuationMessage = [result.reason, context]
         .filter((value): value is string => Boolean(value && value.trim()))
         .join("\n\n");
@@ -151,10 +146,10 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         },
       );
       return;
-    } else if (result.additionalContext) {
-      delivery.injectHiddenContext(result.additionalContext, {
-        hookEventName: "Stop",
-      });
+    } else {
+      for (const { source, text } of result.contexts ?? []) {
+        delivery.injectHiddenContext(text, { hookEventName: "Stop", source });
+      }
     }
 
     shared.stopHookActive = false;

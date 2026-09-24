@@ -54,7 +54,7 @@ describe("UserPromptSubmit hook execution", () => {
 
     const result = await triggerUserPromptSubmitHooks(context, settings);
 
-    expect(result.additionalContext).toBe("CODEGRAPH CONTEXT");
+    expect((result.contexts ?? []).map((entry) => entry.text)).toEqual(["CODEGRAPH CONTEXT"]);
     expect(result.blocked).toBe(false);
   });
 
@@ -75,6 +75,6 @@ describe("UserPromptSubmit hook execution", () => {
 
     const result = await triggerUserPromptSubmitHooks(context, settings);
 
-    expect(result.additionalContext).toBeUndefined();
+    expect(result.contexts).toBeUndefined();
   });
 });

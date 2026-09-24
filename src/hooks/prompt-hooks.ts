@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../claude";
-import { hookReminder, type HookModuleContext } from "../hook-context";
+import { hookReminders, type HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -8,7 +8,7 @@ import type {
   UserPromptSubmitResult,
 } from "../types";
 import {
-  appendAdditionalContext,
+  addContext,
   collectMatchingHooks,
   getStringField,
   runHooksParallel,
@@ -35,6 +35,7 @@ export async function triggerUserPromptSubmitHooks(
   );
 
   for (const {
+    hook,
     hookResult,
     plainStdout,
     jsonOutput,
@@ -52,10 +53,7 @@ export async function triggerUserPromptSubmitHooks(
         jsonOutput.additionalContext,
       );
 
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        additionalContext,
-      );
+      result.contexts = addContext(result.contexts, hook, additionalContext);
 
       if (commonOutput?.systemMessage) {
         notify?.(commonOutput.systemMessage, "warning");
@@ -82,10 +80,7 @@ export async function triggerUserPromptSubmitHooks(
       // Canonical hooks such as `codegraph prompt-hook` print bare text, so
       // treating it as context is the compatible behavior — no JSON envelope,
       // no wrapper command.
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        plainStdout,
-      );
+      result.contexts = addContext(result.contexts, hook, plainStdout);
     }
 
     if (hookResult.exitCode !== 0) {
@@ -132,8 +127,8 @@ export function registerPromptHooks(
       return { handled: true };
     }
 
-    if (result.additionalContext) {
-      shared.pendingUserPromptContext = result.additionalContext;
+    if (result.contexts) {
+      shared.pendingUserPromptContext = result.contexts;
     }
   });
 
@@ -142,14 +137,14 @@ export function registerPromptHooks(
       return;
     }
 
-    const additionalContext = shared.pendingUserPromptContext;
+    const contexts = shared.pendingUserPromptContext;
     shared.pendingUserPromptContext = undefined;
 
     const details = { hookEventName: "UserPromptSubmit" } as const;
     return {
       message: {
         customType: "omp-hooks-plus",
-        content: hookReminder(additionalContext, details),
+        content: hookReminders(contexts, details),
         display: false,
         details,
       },

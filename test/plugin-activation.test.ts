@@ -45,6 +45,6 @@ test("an installed plugin injects its own instructions at startup and compaction
       hookEventName: "SessionStart",
       source,
     }, loaded.settings);
-    expect(result.additionalContext).toBe("Read the relevant skill before acting.");
+    expect(result.contexts).toEqual([{ source: "fixture", text: "Read the relevant skill before acting." }]);
   }
 });

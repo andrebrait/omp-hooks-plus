@@ -109,14 +109,14 @@ function mergeHooks(
 // Claude plugin manifest hooks
 // ============================================================================
 
-function attachHookEnv(hooks: HooksConfig, env: Record<string, string>): HooksConfig {
+function attachHookEnv(hooks: HooksConfig, env: Record<string, string>, source: string | undefined): HooksConfig {
   const result: HooksConfig = {};
   for (const key of ALL_KEYS) {
     const groups = hooks[key];
     if (!groups) continue;
     result[key] = groups.map((group) => ({
       ...group,
-      hooks: group.hooks?.map((hook) => ({ ...hook, env })),
+      hooks: group.hooks?.map((hook) => ({ ...hook, env, ...(source ? { source } : {}) })),
     }));
   }
   return result;
@@ -273,6 +273,9 @@ function resolvePluginRoot(
   }
 
   const declared = manifest.hooks;
+  // The reminder names the plugin; without a usable name it falls back to omp-hooks-plus.
+  const pluginName = typeof manifest.name === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.name)
+    ? manifest.name : undefined;
   const rawConfigs: unknown[] = [];
   let sourcePath: string;
 
@@ -339,7 +342,7 @@ function resolvePluginRoot(
       CLAUDE_PLUGIN_ROOT: root.path,
       CLAUDE_PLUGIN_DATA: dataDir,
       CLAUDE_PROJECT_DIR: projectRoot,
-    }),
+    }, pluginName),
     sourcePath,
   };
 }
