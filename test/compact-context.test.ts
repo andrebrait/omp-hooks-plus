@@ -24,7 +24,7 @@ test("compaction restores bootstrap context to the model without a new user prom
   for (let compaction = 0; compaction < 2; compaction++) {
     await shared.triggerSessionStartHook("compact", ctx);
     jest.advanceTimersByTime(80);
-    expect(messages.splice(0)).toEqual(["<system-reminder source=\"claude-hook\" event=\"SessionStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nRestore the workflow instructions.\n</system-reminder>"]);
+    expect(messages.splice(0)).toEqual(["<system-reminder source=\"omp-hooks-plus\" event=\"SessionStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nRestore the workflow instructions.\n</system-reminder>"]);
   }
   shared.dispose();
 });

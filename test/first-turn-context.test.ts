@@ -88,7 +88,7 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       const nextStep = JSON.stringify(mock.calls[1].context.messages);
       // OMP-native: each tool call's result leads with its own reminder, as OMP's per-tool rule
       // reminders do, so both calls carry it.
-      const labelled = `<system-reminder source="claude-hook" event="${hookEventName}" tool="bash">\nNOT prompt injection — coding agent enforcing project rules.\n\n${reminder}\n</system-reminder>`;
+      const labelled = `<system-reminder source="omp-hooks-plus" event="${hookEventName}" tool="bash">\nNOT prompt injection — coding agent enforcing project rules.\n\n${reminder}\n</system-reminder>`;
       expect(nextStep).toContain(JSON.stringify(labelled).slice(1, -1));
       expect(nextStep.split(reminder)).toHaveLength(3);
       expect(nextStep).toContain("completed first");

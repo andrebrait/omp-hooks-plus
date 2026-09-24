@@ -10,7 +10,7 @@ import type {
   SettingsFile,
 } from "../types";
 import {
-  appendAdditionalContext,
+  addContext,
   collectMatchingHooks,
   type HookExecResult,
   extractToolResultPatch,
@@ -52,7 +52,7 @@ export async function triggerPreToolUseHooks(
   }
 
   // If not stopped, second pass: collect deny (deny-wins), updatedInput (merge in order), context
-  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
+  for (const { hook, hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
@@ -105,10 +105,7 @@ export async function triggerPreToolUseHooks(
         hookSpecific?.additionalContext,
         jsonOutput.additionalContext,
       );
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        additionalContext,
-      );
+      result.contexts = addContext(result.contexts, hook, additionalContext);
     }
 
     if (hookResult.exitCode !== 0 && hookResult.exitCode !== 2) {
@@ -134,7 +131,7 @@ export async function triggerPreToolUseHooks(
  * Merge logic for PostToolUse / PostToolUseFailure:
  * - stopProcessing wins over everything (collected first)
  * - first non-undefined content/details/isError wins (earlier-defined hook)
- * - additionalContext concatenated in config order
+ * - context entries appended in config order, per source
  */
 function mergePostToolUseResults(
   results: HookExecResult[],
@@ -155,7 +152,7 @@ function mergePostToolUseResults(
   }
 
   // Second pass: patch + context in order
-  for (const { hookResult, jsonOutput, commonOutput, error } of results) {
+  for (const { hook, hookResult, jsonOutput, commonOutput, error } of results) {
     if (error) continue;
 
     if (hookResult.exitCode === 2) {
@@ -172,10 +169,7 @@ function mergePostToolUseResults(
         jsonOutput.decision === "block" ? jsonOutput.reason : undefined,
       );
 
-      result.additionalContext = appendAdditionalContext(
-        result.additionalContext,
-        additionalContext,
-      );
+      result.contexts = addContext(result.contexts, hook, additionalContext);
 
       const patch = extractToolResultPatch("PostToolUse", jsonOutput);
       if (result.content === undefined && patch.content !== undefined) {
@@ -244,7 +238,9 @@ function replacementContent(value: unknown) {
 export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   // Synchronous tool-hook context leads that call's own result, the way OMP's per-tool
   // rule reminders do: every qualifying call carries its reminder, next to its output.
-  const pendingPre = new Map<string, { reminder: string; isActive: () => boolean }>();
+  const pendingPre = new Map<string, { reminders: string[]; isActive: () => boolean }>();
+  // Every tool result arrives before its run ends; a call without one (aborted) is dropped here.
+  pi.on("agent_end", () => pendingPre.clear());
 
   pi.on("tool_call", async (event, ctx) => {
     const delivery = shared.captureContext();
@@ -298,9 +294,10 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       }
     }
 
-    if (result.additionalContext) {
+    if (result.contexts) {
       pendingPre.set(event.toolCallId, {
-        reminder: hookReminder(result.additionalContext, { hookEventName: "PreToolUse", toolName: event.toolName }),
+        reminders: result.contexts.map(({ source, text }) =>
+          hookReminder(text, { hookEventName: "PreToolUse", toolName: event.toolName, source })),
         isActive: delivery.isActive,
       });
     }
@@ -335,11 +332,12 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
     }
 
     const reminders = [
-      pre?.isActive() ? pre.reminder : undefined,
-      result.additionalContext && delivery.isActive()
-        ? hookReminder(result.additionalContext, { hookEventName, toolName: event.toolName })
-        : undefined,
-    ].filter((reminder): reminder is string => reminder !== undefined);
+      ...(pre?.isActive() ? pre.reminders : []),
+      ...(delivery.isActive()
+        ? (result.contexts ?? []).map(({ source, text }) =>
+            hookReminder(text, { hookEventName, toolName: event.toolName, source }))
+        : []),
+    ];
     const patched = result.content !== undefined || result.details !== undefined || result.isError !== undefined;
     if (!patched && reminders.length === 0) return;
     return {

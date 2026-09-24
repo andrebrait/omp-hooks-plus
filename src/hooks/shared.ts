@@ -4,6 +4,7 @@ import type {
   Hook,
   HookExecutionContext,
   HookEventName,
+  HookContextEntry,
   HookGroup,
   HookRunResult,
   NotifyFn,
@@ -92,12 +93,21 @@ export function hookIfMatches(
   return globToRegex(inputPattern).test(target);
 }
 
-export function appendAdditionalContext(
-  current: string | undefined,
-  next: string | undefined,
-): string | undefined {
-  if (!next) return current;
-  return current ? `${current}\n${next}` : next;
+export const DEFAULT_SOURCE = "omp-hooks-plus";
+
+/** Append one hook's context in config order; consecutive text from one source shares a reminder. */
+export function addContext(
+  contexts: HookContextEntry[] | undefined,
+  hook: Hook,
+  text: string | undefined,
+): HookContextEntry[] | undefined {
+  if (!text) return contexts;
+  const source = hook.source ?? DEFAULT_SOURCE;
+  const last = contexts?.at(-1);
+  if (contexts && last?.source === source) {
+    return [...contexts.slice(0, -1), { source, text: `${last.text}\n${text}` }];
+  }
+  return [...(contexts ?? []), { source, text }];
 }
 
 export function parseJsonOutput(
@@ -233,6 +243,7 @@ export async function executeParsedHook(
         context.asyncContextSink?.(additionalContext, {
           hookEventName: eventName,
           toolName: context.toolName,
+          source: hook.source,
           async: true,
         });
       }
@@ -249,6 +260,7 @@ export async function executeParsedHook(
           {
             hookEventName: eventName,
             toolName: context.toolName,
+            source: hook.source,
             async: true,
             asyncRewake: true,
           },
@@ -423,7 +435,7 @@ export async function triggerSimpleHooks(
   const results = await runHooksParallel(collected, context, eventName);
   const aggregatedResult: HookRunResult = {};
 
-  for (const { hookResult, plainStdout, jsonOutput, commonOutput, error } of results) {
+  for (const { hook, hookResult, plainStdout, jsonOutput, commonOutput, error } of results) {
     if (error) {
       notify?.(`Hook execution error: ${String(error)}`, "error");
       continue;
@@ -435,10 +447,7 @@ export async function triggerSimpleHooks(
           jsonOutput.additionalContext,
         )
       : undefined;
-    aggregatedResult.additionalContext = appendAdditionalContext(
-      aggregatedResult.additionalContext,
-      additionalContext,
-    );
+    aggregatedResult.contexts = addContext(aggregatedResult.contexts, hook, additionalContext);
 
     if (
       eventName === "SessionStart" &&
@@ -446,10 +455,7 @@ export async function triggerSimpleHooks(
       !jsonOutput &&
       plainStdout
     ) {
-      aggregatedResult.additionalContext = appendAdditionalContext(
-        aggregatedResult.additionalContext,
-        plainStdout,
-      );
+      aggregatedResult.contexts = addContext(aggregatedResult.contexts, hook, plainStdout);
     }
 
     if (commonOutput?.systemMessage) {

@@ -24,7 +24,7 @@ afterEach(() => {
 // OMP's native reminder shape (ttsr-tool-reminder.md): attributes on the tag, then OMP's own
 // closing sentence verbatim, then the hook's text.
 const reminder = (event: string, text: string, tool?: string) =>
-  `<system-reminder source="claude-hook" event="${event}"${tool ? ` tool="${tool}"` : ""}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
+  `<system-reminder source="omp-hooks-plus" event="${event}"${tool ? ` tool="${tool}"` : ""}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
 const SESSION = { hookEventName: "SessionStart" } as const;
 const r = (text: string) => reminder("SessionStart", text);
 
@@ -33,7 +33,7 @@ test("each context reaches the model as an OMP-native hook reminder", () => {
   const shared = context(messages);
   shared.injectHiddenContext("tool", { hookEventName: "PreToolUse", toolName: "bash", toolUseId: "1" }, false, "aside");
   shared.injectHiddenContext("failed", { hookEventName: "PostToolUseFailure", toolName: "read" }, false, "aside");
-  shared.injectHiddenContext("boot", { hookEventName: "SessionStart", source: "startup" }, false, "aside");
+  shared.injectHiddenContext("boot", { hookEventName: "SessionStart", matcher: "startup" }, false, "aside");
   expect(messages).toEqual([
     reminder("PreToolUse", "tool", "bash"),
     reminder("PostToolUseFailure", "failed", "read"),

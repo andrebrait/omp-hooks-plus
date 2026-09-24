@@ -60,10 +60,8 @@ export function registerSessionHooks(
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
-    if (result.additionalContext) {
-      shared.injectHiddenContext(result.additionalContext, {
-        hookEventName: "SessionEnd",
-      });
+    for (const { source, text } of result.contexts ?? []) {
+      shared.injectHiddenContext(text, { hookEventName: "SessionEnd", source });
     }
   });
 }

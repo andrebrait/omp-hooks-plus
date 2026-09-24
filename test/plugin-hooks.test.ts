@@ -73,7 +73,7 @@ test("OMP plugins execute without opting into foreign Claude user plugins", asyn
     const result = await triggerSessionHooks("SessionStart", "startup", {
       sessionId: "foreign-source", cwd: repo, hookEventName: "SessionStart", source: "startup",
     }, loaded.settings);
-    expect(result.additionalContext).toBe("native");
+    expect(result.contexts).toEqual([{ source: "native", text: "native" }]);
   } finally {
     if (previousConfigDir !== undefined) process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
   }
@@ -366,7 +366,7 @@ describe("plugin hook execution", () => {
     const result = await triggerSessionHooks("SessionStart", "resume", {
       sessionId: "state", cwd: repo, hookEventName: "SessionStart", source: "resume",
     }, loaded.settings);
-    expect(result.additionalContext).toBe("ISOLATED");
+    expect((result.contexts ?? []).map((entry) => entry.text)).toEqual(["ISOLATED"]);
   });
 
   test("a plugin data-directory failure does not suppress user hooks", async () => {
@@ -391,7 +391,7 @@ describe("plugin hook execution", () => {
     const result = await triggerSessionHooks("SessionStart", "startup", {
       sessionId: "data-failure", cwd: repo, hookEventName: "SessionStart", source: "startup",
     }, loaded.settings);
-    expect(result.additionalContext).toBe("USER-GUARD");
+    expect(result.contexts).toEqual([{ source: "omp-hooks-plus", text: "USER-GUARD" }]);
     expect(loaded.warnings.some(warning => warning.includes(dataRoot))).toBe(true);
   });
 
@@ -421,7 +421,8 @@ describe("plugin hook execution", () => {
       loaded.settings,
     );
 
-    expect(result.additionalContext).toBe("FROM-A\nFROM-B");
+    // Each plugin keeps its own provenance instead of being merged into one text.
+    expect(result.contexts).toEqual([{ source: "plugin-a", text: "FROM-A" }, { source: "plugin-b", text: "FROM-B" }]);
   });
 
   test("a plugin root path containing shell metacharacters is passed as literal data, never shell-reinterpreted", async () => {
@@ -447,7 +448,7 @@ describe("plugin hook execution", () => {
       loaded.settings,
     );
 
-    expect(result.additionalContext).toBe("SAFE-CONTENT");
+    expect(result.contexts).toEqual([{ source: "injection-fixture", text: "SAFE-CONTENT" }]);
     expect(existsSync(path.join(repo, "INJECTED"))).toBe(false);
   });
 });

@@ -52,10 +52,10 @@ describe("successful plain-text hook output", () => {
       const { result, notifications } = await run(eventName, "printf '%s' 'Session status updated.'");
 
       expect(notifications).toEqual([]);
-      expect(result.additionalContext).toBe(
+      expect((result.contexts ?? []).map((entry) => entry.text)).toEqual(
         eventName === "SessionStart" || eventName === "UserPromptSubmit"
-          ? "Session status updated."
-          : undefined,
+          ? ["Session status updated."]
+          : [],
       );
       if ("blocked" in result) expect(result.blocked).toBe(false);
     });
@@ -77,7 +77,7 @@ describe("diagnostics survive success-output suppression", () => {
   for (const eventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] as const) {
     test(`${eventName} still delivers structured context`, async () => {
       const { result } = await run(eventName, "printf '%s' '{\"additionalContext\":\"Review command results\"}'");
-      expect(result.additionalContext).toBe("Review command results");
+      expect((result.contexts ?? []).map((entry) => entry.text)).toEqual(["Review command results"]);
     });
   }
 });

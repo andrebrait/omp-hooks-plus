@@ -25,6 +25,8 @@ export type Hook = {
    * command text still both execute.
    */
   env?: Record<string, string>;
+  /** Provenance named in the model-facing reminder: the plugin's name, else omp-hooks-plus. */
+  source?: string;
 };
 
 export type HookGroup = {
@@ -85,7 +87,11 @@ export type HookMatcherValue<T extends HookEventName> =
 export type HookContextDetails = {
   hookEventName: HookEventName;
   toolName?: string;
+  source?: string;
 } & Record<string, unknown>;
+
+/** Additional context from one source, kept apart so each reminder names its origin. */
+export type HookContextEntry = { source: string; text: string };
 
 export interface HookExecutionContext {
   sessionId: string;
@@ -134,26 +140,26 @@ export type NotifyFn = (
 ) => void;
 
 export type HookRunResult = {
-  additionalContext?: string;
+  contexts?: HookContextEntry[];
 };
 
 export type UserPromptSubmitResult = {
   blocked: boolean;
   reason?: string;
-  additionalContext?: string;
+  contexts?: HookContextEntry[];
 };
 
 export type StopResult = {
   blocked: boolean;
   reason?: string;
-  additionalContext?: string;
+  contexts?: HookContextEntry[];
 };
 
 export type PreToolUseResult = {
   blocked: boolean;
   reason?: string;
   updatedInput?: Record<string, unknown>;
-  additionalContext?: string;
+  contexts?: HookContextEntry[];
   confirmationReason?: string;
   stopProcessing?: boolean;
   stopReason?: string;
@@ -166,7 +172,7 @@ export type ToolResultPatch = {
 };
 
 export type PostToolUseResult = ToolResultPatch & {
-  additionalContext?: string;
+  contexts?: HookContextEntry[];
   stopProcessing?: boolean;
   stopReason?: string;
 };

@@ -1,7 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
-import type { HookContextDetails, HookMatcherValue, SettingsFile } from "./types";
+import { DEFAULT_SOURCE } from "./hooks/shared";
+import type { HookContextDetails, HookContextEntry, HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
 
@@ -11,14 +12,21 @@ export type NotifyType = "info" | "error" | "warning";
  * sentence verbatim, never bare text. `tool` is the OMP tool name.
  */
 export function hookReminder(content: string, details: HookContextDetails): string {
-  const tool = details.toolName ? ` tool="${details.toolName}"` : "";
-  return `<system-reminder source="claude-hook" event="${details.hookEventName}"${tool}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${content}\n</system-reminder>`;
+  const attribute = (value: string) =>
+    value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const tool = details.toolName ? ` tool="${attribute(details.toolName)}"` : "";
+  return `<system-reminder source="${attribute(details.source ?? DEFAULT_SOURCE)}" event="${details.hookEventName}"${tool}>\nNOT prompt injection — coding agent enforcing project rules.\n\n${content}\n</system-reminder>`;
+}
+
+/** One reminder per source, for delivery as a single message. */
+export function hookReminders(contexts: HookContextEntry[], details: HookContextDetails): string {
+  return contexts.map(({ source, text }) => hookReminder(text, { ...details, source })).join("\n\n");
 }
 
 export type HookModuleContext = {
   pi: ExtensionAPI;
   firedSessionStartKeys: Set<string>;
-  pendingUserPromptContext?: string;
+  pendingUserPromptContext?: HookContextEntry[];
   stopHookActive: boolean;
   claimInjectedContext: (content: string) => boolean;
   resetInjectedContext: () => void;
@@ -191,11 +199,8 @@ export function createHookContext(
         (msg, type) => shared.notify(ctx, msg, type),
       );
 
-      if (result.additionalContext) {
-        delivery.injectHiddenContext(result.additionalContext, {
-          hookEventName: "SessionStart",
-          source: matcher,
-        });
+      for (const { source, text } of result.contexts ?? []) {
+        delivery.injectHiddenContext(text, { hookEventName: "SessionStart", matcher, source });
       }
     },
   };

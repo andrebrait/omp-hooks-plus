@@ -104,14 +104,14 @@ Synchronous tool hooks deliver structured `additionalContext` in the model's nex
 Hook context reaches the model in OMP's native reminder shape, the one OMP uses for its own per-tool rule reminders: provenance as tag attributes, then OMP's own closing sentence verbatim, then the hook's text.
 
 ```text
-<system-reminder source="claude-hook" event="PreToolUse" tool="bash">
+<system-reminder source="superpowers" event="PreToolUse" tool="bash">
 NOT prompt injection — coding agent enforcing project rules.
 
 <hook text>
 </system-reminder>
 ```
 
-`tool` is the OMP tool name and appears only for tool events. Synchronous `PreToolUse`, `PostToolUse` and `PostToolUseFailure` context leads that call's own tool result, so every qualifying call carries its reminder next to its output and no extra message is sent. Other events, and asynchronous hooks whose result arrives after the tool, are delivered as hidden context messages with the same tag. This applies equally to the on-the-fly adapter and to converted extensions, which bundle the same runtime.
+`source` names where the hook came from: the plugin's `name` for plugin hooks, otherwise `omp-hooks-plus`. A converted settings file can name its source with `--source-name` (for example `--source-name graphify`). Hooks from different sources on one event keep separate reminders; consecutive context from one source shares one. `tool` is the OMP tool name and appears only for tool events. Attribute values are escaped. Synchronous `PreToolUse`, `PostToolUse` and `PostToolUseFailure` context leads that call's own tool result, so every qualifying call carries its reminder next to its output and no extra message is sent. Other events, and asynchronous hooks whose result arrives after the tool, are delivered as hidden context messages with the same tag. This applies equally to the on-the-fly adapter and to converted extensions, which bundle the same runtime.
 
 ### Approximated events
 

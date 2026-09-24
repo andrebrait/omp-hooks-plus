@@ -36,10 +36,8 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
       (msg, type) => shared.notify(ctx, msg, type),
     );
 
-    if (result.additionalContext) {
-      delivery.injectHiddenContext(result.additionalContext, {
-        hookEventName: "PreCompact",
-      });
+    for (const { source, text } of result.contexts ?? []) {
+      delivery.injectHiddenContext(text, { hookEventName: "PreCompact", source });
     }
   });
 
@@ -64,10 +62,8 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
     );
     if (!delivery.isActive()) return;
 
-    if (result.additionalContext) {
-      delivery.injectHiddenContext(result.additionalContext, {
-        hookEventName: "PostCompact",
-      });
+    for (const { source, text } of result.contexts ?? []) {
+      delivery.injectHiddenContext(text, { hookEventName: "PostCompact", source });
     }
 
     await shared.triggerSessionStartHook("compact", ctx);

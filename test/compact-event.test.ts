@@ -35,7 +35,7 @@ test('compaction deduplicates matching hooks and restores distinct instructions 
   // Claude Code names each hook in its reminder. Identical text from two hooks is still
   // delivered once; the first hook to deliver it (PostCompact) names it.
   const reminder = (event: string, text: string) =>
-    `<system-reminder source="claude-hook" event="${event}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
+    `<system-reminder source="omp-hooks-plus" event="${event}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
   expect(await compact()).toBe(reminder('PostCompact', 'Bootstrap instructions.'));
   postContext = 'Post-compact instructions.';
   const both = `${reminder('PostCompact', 'Post-compact instructions.')}\n\n${reminder('SessionStart', 'Bootstrap instructions.')}`;

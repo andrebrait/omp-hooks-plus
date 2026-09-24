@@ -323,7 +323,7 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
     // Generated extensions share the runtime's delivery: Claude Code's named hook reminder.
     expect((await runner.emitBeforeAgentStart("ordinary prompt", undefined, []))?.messages).toEqual([
       expect.objectContaining({
-        content: `<system-reminder source="claude-hook" event="UserPromptSubmit">\nNOT prompt injection — coding agent enforcing project rules.\n\n${literal}\n</system-reminder>`,
+        content: `<system-reminder source="converter-test" event="UserPromptSubmit">\nNOT prompt injection — coding agent enforcing project rules.\n\n${literal}\n</system-reminder>`,
         display: false,
       }),
     ]);
@@ -357,7 +357,7 @@ test("generated tool hooks lead their tool result with an OMP-native reminder, s
   const auth = await AuthStorage.create(":memory:");
   const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, project, SessionManager.inMemory(project), new ModelRegistry(auth));
   const named = (event: string, tool: string) =>
-    `<system-reminder source="claude-hook" event="${event}" tool="${tool}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${event} context\n</system-reminder>`;
+    `<system-reminder source="converter-test" event="${event}" tool="${tool}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${event} context\n</system-reminder>`;
   const ok = { type: "text", text: "ok" };
   try {
     expect((await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "pre", input: { command: "ls" } }))?.block).not.toBe(true);
@@ -471,7 +471,7 @@ test("generated approximations notify on approval requests and idle stops, and b
     const child = path.join(sessions, "parent", "0-Explore.jsonl");
     const briefing = await emit({ type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] }, child);
     expect(briefing).toEqual([{ message: expect.objectContaining({
-      content: "<system-reminder source=\"claude-hook\" event=\"SubagentStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nDELEGATE MODES\n</system-reminder>", display: false,
+      content: "<system-reminder source=\"converter-test\" event=\"SubagentStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nDELEGATE MODES\n</system-reminder>", display: false,
     }) }]);
     // Once per subagent session, like Claude's single SubagentStart at spawn.
     expect(await emit({ type: "before_agent_start", prompt: "again", images: [], systemPrompt: [] }, child)).toEqual([]);
@@ -611,4 +611,69 @@ test("a dangling resource symlink is reported as a missing target", async () => 
     level: "unsupported", file: "AGENTS.md",
     message: "Resource symlink target does not exist; restore the target or remove the link before conversion",
   });
+});
+
+test("hooks from different sources on one tool call keep separate, named reminders", async () => {
+  const { project } = fixture();
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  const say = (text: string) => ({ type: "command", command: `printf '%s' '${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: text } })}'` });
+  registerHooks(pi as never, async () => ({ hooks: { PreToolUse: [
+    { hooks: [{ ...say("A1"), source: "plugin-a" }, { ...say("A2"), source: "plugin-a" }] },
+    { hooks: [{ ...say("B"), source: "plugin-b" }, say("S")] },
+  ] } }) as never);
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const call = { toolName: "bash", toolCallId: "c", input: { command: "ls" } };
+  for (const handler of handlers.get("tool_call") ?? []) await handler({ type: "tool_call", ...call }, ctx);
+  let result: { content?: Array<{ text: string }> } | undefined;
+  for (const handler of handlers.get("tool_result") ?? []) result = await handler({ type: "tool_result", ...call, content: [{ type: "text", text: "ok" }], isError: false }, ctx) as typeof result;
+  const tag = (source: string, text: string) =>
+    `<system-reminder source="${source}" event="PreToolUse" tool="bash">\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
+  expect(result?.content?.map(block => block.text)).toEqual([
+    tag("plugin-a", "A1\nA2"), tag("plugin-b", "B"), tag("omp-hooks-plus", "S"), "ok",
+  ]);
+});
+
+test("a converted settings file names its reminders with --source-name, and rejects unsafe names", async () => {
+  const { root, project } = fixture();
+  mkdirSync(path.join(root, "config"));
+  const settings = path.join(root, "config", "settings.json");
+  writeFileSync(settings, JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: `printf '%s' '${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "guard" } })}'` }] }] } }));
+  await expect(convertHooks(settings, { dryRun: true, sourceName: 'bad" name' })).rejects.toThrow();
+  const out = path.join(root, "named");
+  const cli = fileURLToPath(new URL("../src/convert.ts", import.meta.url));
+  expect(await Bun.spawn([process.execPath, cli, settings, "--out", out, "--source-name", "graphify"], { stdout: "ignore", stderr: "ignore" }).exited).toBe(0);
+  const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+  expect(loaded.errors).toEqual([]);
+  const handlers = loaded.extensions[0].handlers;
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} }, isProjectTrusted: () => true };
+  const call = { toolName: "grep", toolCallId: "g", input: { pattern: "x" } };
+  for (const handler of handlers.get("tool_call") ?? []) await handler({ type: "tool_call", ...call } as never, ctx as never);
+  const [handler] = handlers.get("tool_result") ?? [];
+  const result = await handler({ type: "tool_result", ...call, content: [], isError: false } as never, ctx as never) as { content: Array<{ text: string }> };
+  expect(result.content[0].text.startsWith('<system-reminder source="graphify" event="PreToolUse" tool="grep">')).toBe(true);
+  await handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown" } as never, ctx as never);
+});
+
+test("reminder attributes are escaped and an unanswered tool call leaves nothing behind", async () => {
+  const { project } = fixture();
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  const say = { type: "command", command: `printf '%s' '{"additionalContext":"ctx"}'`, source: 'p"<&>' };
+  registerHooks(pi as never, async () => ({ hooks: { PreToolUse: [{ hooks: [say] }] } }) as never);
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const emit = async (type: string, event: Record<string, unknown>) => {
+    let last: unknown;
+    for (const handler of handlers.get(type) ?? []) last = await handler({ type, ...event }, ctx);
+    return last as { content?: Array<{ text: string }> } | undefined;
+  };
+  const call = { toolName: 'my"<&tool', toolCallId: "a", input: {} };
+  await emit("tool_call", call);
+  const result = await emit("tool_result", { ...call, content: [], isError: false });
+  expect(result?.content?.[0].text.split("\n")[0]).toBe('<system-reminder source="p&quot;&lt;&amp;&gt;" event="PreToolUse" tool="my&quot;&lt;&amp;tool">');
+
+  // A call whose result never arrives (aborted run) is dropped when the run ends.
+  await emit("tool_call", { ...call, toolCallId: "orphan" });
+  await emit("agent_end", { messages: [] });
+  expect(await emit("tool_result", { ...call, toolCallId: "orphan", content: [], isError: false })).toBeUndefined();
 });
