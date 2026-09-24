@@ -53,7 +53,7 @@
     "@oh-my-pi/pi-coding-agent": ">=18.1.16"
   },
   "devDependencies": {
-    "@oh-my-pi/pi-coding-agent": "^18.1.16",
+    "@oh-my-pi/pi-coding-agent": "^18.3.0",
     "typescript": "^6.0.2"
   }
 }

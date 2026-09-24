@@ -75,7 +75,7 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       initialState: { model, systemPrompt: ["Test"], tools: [tool] },
     });
     const auth = await AuthStorage.create(":memory:");
-    auth.setRuntimeApiKey("anthropic", "test-key");
+    auth.keys.setRuntime("anthropic", "test-key");
     session = new AgentSession({
       agent, sessionManager, settings: Settings.isolated({ "compaction.enabled": false }),
       modelRegistry: new ModelRegistry(auth),
