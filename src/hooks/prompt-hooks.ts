@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../claude";
-import type { HookModuleContext } from "../hook-context";
+import { hookReminder, type HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -145,14 +145,13 @@ export function registerPromptHooks(
     const additionalContext = shared.pendingUserPromptContext;
     shared.pendingUserPromptContext = undefined;
 
+    const details = { hookEventName: "UserPromptSubmit" } as const;
     return {
       message: {
         customType: "omp-hooks-plus",
-        content: additionalContext,
+        content: hookReminder(additionalContext, details),
         display: false,
-        details: {
-          hookEventName: "UserPromptSubmit",
-        },
+        details,
       },
     };
   });

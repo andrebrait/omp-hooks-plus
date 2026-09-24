@@ -232,6 +232,7 @@ export async function executeParsedHook(
       if (additionalContext) {
         context.asyncContextSink?.(additionalContext, {
           hookEventName: eventName,
+          toolName: context.toolName,
           async: true,
         });
       }
@@ -247,6 +248,7 @@ export async function executeParsedHook(
           reminder,
           {
             hookEventName: eventName,
+            toolName: context.toolName,
             async: true,
             asyncRewake: true,
           },

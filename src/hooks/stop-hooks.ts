@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../claude";
 import { extractTextFromContent } from "../helpers";
-import type { HookModuleContext } from "../hook-context";
+import { hookReminder, type HookModuleContext } from "../hook-context";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -125,7 +125,12 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
         return;
       }
 
-      const continuationMessage = [result.reason, result.additionalContext]
+      // Claude Code delivers the block reason as Stop feedback and any additional
+      // context beside it as its own named hook reminder.
+      const context = result.additionalContext?.trim()
+        ? hookReminder(result.additionalContext, { hookEventName: "Stop" })
+        : undefined;
+      const continuationMessage = [result.reason, context]
         .filter((value): value is string => Boolean(value && value.trim()))
         .join("\n\n");
 

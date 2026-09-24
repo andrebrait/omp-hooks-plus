@@ -21,17 +21,68 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
+// Claude Code 2.1.277 wraps every hook's additional context as
+// `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`.
+const reminder = (hookName: string, text: string) =>
+  `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`;
+const SESSION = { hookEventName: "SessionStart" } as const;
+const r = (text: string) => reminder("SessionStart", text);
+
+test("each context reaches the model as Claude Code's named hook reminder", () => {
+  const messages: string[] = [];
+  const shared = context(messages);
+  shared.injectHiddenContext("tool", { hookEventName: "PreToolUse", toolName: "bash", toolUseId: "1" }, false, "aside");
+  shared.injectHiddenContext("failed", { hookEventName: "PostToolUseFailure", toolName: "read" }, false, "aside");
+  shared.injectHiddenContext("boot", { hookEventName: "SessionStart", source: "startup" }, false, "aside");
+  expect(messages).toEqual([
+    reminder("PreToolUse:Bash", "tool"),
+    reminder("PostToolUseFailure:Read", "failed"),
+    reminder("SessionStart", "boot"),
+  ]);
+});
+
+test("a blocking Stop hook's additional context rides its continuation as a named reminder", async () => {
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+  const messages: { content: string }[] = [];
+  const pi = {
+    on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => handlers.set(name, handler),
+    sendMessage: (message: { content: string }) => messages.push(message),
+  } as unknown as ExtensionAPI;
+  const output = JSON.stringify({ decision: "block", reason: "Run the tests.", hookSpecificOutput: { hookEventName: "Stop", additionalContext: "Suite: bun test" } });
+  const shared = createHookContext(pi, async () => ({ hooks: { Stop: [{ hooks: [{ type: "command", command: `printf '%s' '${output}'` }] }] } }));
+  contexts.push(shared);
+  registerStopHooks(pi, shared);
+  await handlers.get("agent_end")!({ messages: [] }, { cwd: process.cwd(), sessionManager: { getSessionFile: () => "stop" }, ui: { notify: () => {} } });
+  expect(messages.map(message => message.content)).toEqual([`Run the tests.\n\n${reminder("Stop", "Suite: bun test")}`]);
+});
+
+test("an async tool hook's late context still names its event and tool", async () => {
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+  const { promise: delivered, resolve } = Promise.withResolvers<string>();
+  const pi = {
+    on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => handlers.set(name, handler),
+    sendMessage: (message: { content: string }) => resolve(message.content),
+  } as unknown as ExtensionAPI;
+  const output = JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "late" } });
+  const shared = createHookContext(pi, async () => ({ hooks: { PostToolUse: [{ hooks: [{ type: "command", async: true, command: `printf '%s' '${output}'` }] }] } }));
+  contexts.push(shared);
+  registerToolHooks(pi, shared);
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "async" }, ui: { notify: () => {} } };
+  await handlers.get("tool_result")!({ toolName: "bash", toolCallId: "1", input: {}, content: [], isError: false }, ctx);
+  expect(await delivered).toBe(reminder("PostToolUse:Bash", "late"));
+});
+
 test("identical reminders are delivered once per turn, preserving distinct content", () => {
   const messages: string[] = [];
   const shared = context(messages);
-  shared.injectHiddenContext("REMINDER", {}, false, "aside");
-  shared.injectHiddenContext("REMINDER", {}, false, "aside");
-  shared.injectHiddenContext(" REMINDER", {}, false, "aside");
-  expect(messages).toEqual(["REMINDER", " REMINDER"]);
+  shared.injectHiddenContext("REMINDER", SESSION, false, "aside");
+  shared.injectHiddenContext("REMINDER", SESSION, false, "aside");
+  shared.injectHiddenContext(" REMINDER", SESSION, false, "aside");
+  expect(messages).toEqual([r("REMINDER"), r(" REMINDER")]);
 
   shared.resetInjectedContext();
-  shared.injectHiddenContext("REMINDER", {}, false, "aside");
-  expect(messages).toEqual(["REMINDER", " REMINDER", "REMINDER"]);
+  shared.injectHiddenContext("REMINDER", SESSION, false, "aside");
+  expect(messages).toEqual([r("REMINDER"), r(" REMINDER"), r("REMINDER")]);
 });
 
 test("two adapters isolate queued content and turn deduplication", () => {
@@ -40,23 +91,23 @@ test("two adapters isolate queued content and turn deduplication", () => {
   const secondMessages: string[] = [];
   const first = context(firstMessages);
   const second = context(secondMessages);
-  first.injectHiddenContext("SHARED REMINDER", {});
-  first.injectHiddenContext("FIRST ONLY", {});
-  second.injectHiddenContext("SHARED REMINDER", {});
-  second.injectHiddenContext("SECOND ONLY", {});
+  first.injectHiddenContext("SHARED REMINDER", SESSION);
+  first.injectHiddenContext("FIRST ONLY", SESSION);
+  second.injectHiddenContext("SHARED REMINDER", SESSION);
+  second.injectHiddenContext("SECOND ONLY", SESSION);
 
   // A prompt/compaction reset must not duplicate content still in the queue.
   first.resetInjectedContext();
-  first.injectHiddenContext("SHARED REMINDER", {});
+  first.injectHiddenContext("SHARED REMINDER", SESSION);
   jest.advanceTimersByTime(80);
-  expect(firstMessages).toEqual(["SHARED REMINDER\n\nFIRST ONLY"]);
-  expect(secondMessages).toEqual(["SHARED REMINDER\n\nSECOND ONLY"]);
+  expect(firstMessages).toEqual([`${r("SHARED REMINDER")}\n\n${r("FIRST ONLY")}`]);
+  expect(secondMessages).toEqual([`${r("SHARED REMINDER")}\n\n${r("SECOND ONLY")}`]);
 
   first.resetInjectedContext();
-  first.injectHiddenContext("SHARED REMINDER", {}, false, "aside");
-  second.injectHiddenContext("SHARED REMINDER", {}, false, "aside");
-  expect(firstMessages).toEqual(["SHARED REMINDER\n\nFIRST ONLY", "SHARED REMINDER"]);
-  expect(secondMessages).toEqual(["SHARED REMINDER\n\nSECOND ONLY"]);
+  first.injectHiddenContext("SHARED REMINDER", SESSION, false, "aside");
+  second.injectHiddenContext("SHARED REMINDER", SESSION, false, "aside");
+  expect(firstMessages).toEqual([`${r("SHARED REMINDER")}\n\n${r("FIRST ONLY")}`, r("SHARED REMINDER")]);
+  expect(secondMessages).toEqual([`${r("SHARED REMINDER")}\n\n${r("SECOND ONLY")}`]);
 });
 
 test("session switch drops queued and late context without disabling the next session", () => {
@@ -64,12 +115,12 @@ test("session switch drops queued and late context without disabling the next se
   const messages: string[] = [];
   const shared = context(messages);
   const oldDelivery = shared.captureContext();
-  oldDelivery.injectHiddenContext("OLD QUEUED", {});
+  oldDelivery.injectHiddenContext("OLD QUEUED", SESSION);
   shared.resetSession();
-  oldDelivery.injectHiddenContext("OLD ASYNC", {}, true);
-  shared.captureContext().injectHiddenContext("NEW SESSION", {});
+  oldDelivery.injectHiddenContext("OLD ASYNC", SESSION, true);
+  shared.captureContext().injectHiddenContext("NEW SESSION", SESSION);
   jest.advanceTimersByTime(80);
-  expect(messages).toEqual(["NEW SESSION"]);
+  expect(messages).toEqual([r("NEW SESSION")]);
 });
 
 test("disposing one adapter drops its queued and late deliveries without touching another", () => {
@@ -79,14 +130,14 @@ test("disposing one adapter drops its queued and late deliveries without touchin
   const first = context(firstMessages);
   const second = context(secondMessages);
   const lateDelivery = first.captureContext();
-  first.injectHiddenContext("FIRST QUEUED", {});
-  second.injectHiddenContext("SECOND QUEUED", {});
+  first.injectHiddenContext("FIRST QUEUED", SESSION);
+  second.injectHiddenContext("SECOND QUEUED", SESSION);
   first.dispose();
-  lateDelivery.injectHiddenContext("FIRST LATE", {}, true);
-  first.injectHiddenContext("FIRST AFTER DISPOSE", {}, false, "aside");
+  lateDelivery.injectHiddenContext("FIRST LATE", SESSION, true);
+  first.injectHiddenContext("FIRST AFTER DISPOSE", SESSION, false, "aside");
   jest.advanceTimersByTime(80);
   expect(firstMessages).toEqual([]);
-  expect(secondMessages).toEqual(["SECOND QUEUED"]);
+  expect(secondMessages).toEqual([r("SECOND QUEUED")]);
 });
 
 function pendingHook(eventName: "PreToolUse" | "UserPromptSubmit" | "Stop") {
@@ -153,5 +204,5 @@ test("each ephemeral session receives startup context once after a session reset
   shared.resetSession();
   await shared.triggerSessionStartHook("startup", ctx);
   jest.advanceTimersByTime(70);
-  expect(messages).toEqual(["bootstrap", "bootstrap"]);
+  expect(messages).toEqual([r("bootstrap"), r("bootstrap")]);
 });

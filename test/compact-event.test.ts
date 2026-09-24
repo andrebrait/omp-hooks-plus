@@ -32,9 +32,14 @@ test('compaction deduplicates matching hooks and restores distinct instructions 
     jest.advanceTimersByTime(80);
     return messages.splice(0).join('\n\n');
   };
-  expect(await compact()).toBe('Bootstrap instructions.');
+  // Claude Code names each hook in its reminder. Identical text from two hooks is still
+  // delivered once; the first hook to deliver it (PostCompact) names it.
+  const reminder = (hookName: string, text: string) =>
+    `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`;
+  expect(await compact()).toBe(reminder('PostCompact', 'Bootstrap instructions.'));
   postContext = 'Post-compact instructions.';
-  expect(await compact()).toBe('Post-compact instructions.\n\nBootstrap instructions.');
-  expect(await compact()).toBe('Post-compact instructions.\n\nBootstrap instructions.');
+  const both = `${reminder('PostCompact', 'Post-compact instructions.')}\n\n${reminder('SessionStart', 'Bootstrap instructions.')}`;
+  expect(await compact()).toBe(both);
+  expect(await compact()).toBe(both);
   shared.dispose();
 });
