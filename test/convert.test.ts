@@ -341,6 +341,36 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
   }
 });
 
+test("generated tool hooks deliver context as Claude Code's named hook reminder", async () => {
+  const { plugin, project, out } = fixture();
+  const context = (event: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: `${event} context` } });
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
+    PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: `printf '%s' '${context("PreToolUse")}'` }] }],
+    PostToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: `printf '%s' '${context("PostToolUse")}'` }] }],
+  } }));
+  expect((await convertHooks(plugin, { out })).exitCode).toBe(0);
+  const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+  expect(loaded.errors).toEqual([]);
+  const messages: Array<{ message: unknown; options: unknown }> = [];
+  loaded.runtime.sendMessage = (message, options) => { messages.push({ message, options }); };
+  const auth = await AuthStorage.create(":memory:");
+  const runner = new ExtensionRunner(loaded.extensions, loaded.runtime, project, SessionManager.inMemory(project), new ModelRegistry(auth));
+  const named = (hookName: string, text: string) =>
+    `<system-reminder>\n${hookName} hook additional context: ${text}\n</system-reminder>`;
+  try {
+    expect((await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "pre", input: { command: "ls" } }))?.block).not.toBe(true);
+    await runner.emitToolResult({ type: "tool_result", toolName: "read", toolCallId: "post", input: { path: "x" }, content: [{ type: "text", text: "ok" }], details: undefined, isError: false });
+    expect(messages).toEqual([
+      { message: expect.objectContaining({ content: named("PreToolUse:Bash", "PreToolUse context"), display: false }), options: { deliverAs: "aside" } },
+      { message: expect.objectContaining({ content: named("PostToolUse:Read", "PostToolUse context"), display: false }), options: { deliverAs: "aside" } },
+    ]);
+  } finally {
+    await runner.emit({ type: "session_shutdown" });
+    runner.clearManagedTimers();
+    auth.close();
+  }
+});
+
 test.each(["symlink", "directory"])("source root replacement before resource collection fails closed (%s)", async (kind) => {
   const { root, plugin, out } = fixture();
   const replacement = path.join(root, "replacement");
