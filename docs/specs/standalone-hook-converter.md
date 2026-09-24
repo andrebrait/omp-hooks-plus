@@ -34,11 +34,13 @@ The shared executor resolves local `Read` aliases using OMP's literal-aware sele
 
 ## Result
 
-- Exit **0**: supported inventory; conversion writes runnable output, or `--dry-run` writes nothing.
+- Exit **0**: supported inventory; conversion writes runnable output, or `--dry-run` writes nothing. With `--skip-unsupported`, unsupported declarations and resources are left out and listed in the report, and the rest still converts.
 - Exit **1**: invalid input or operational failure; no successful conversion. An interrupted process or failed cleanup can leave incomplete output.
-- Exit **2**: unsupported declarations/resources; normal conversion writes a report only, never a partial runnable entrypoint.
+- Exit **2**: unsupported declarations/resources; normal conversion writes a report only, never a partial runnable entrypoint. A command that embeds the original source root stays exit 2 even with `--skip-unsupported`, because the hook itself would be emitted.
 
-`--json` prints the structured report. Reports identify declaration locations and statuses without copying command bodies or settings values. Additive schema-version-1 fields identify `conversionLevel: "command-hook-adaptation"`, detected `nativeBindings` with `status: "not-reused"`, effective `activation`, and `output.omittedResources`. Successful adaptation does not reproduce native commands, recovery tools, provider integration, system-prompt ownership, or native session state. Generated definitions and copied resources still contain executable source and must be reviewed as code.
+`--approximate` maps Claude events without an OMP counterpart onto near-equivalent OMP triggers, currently `Notification` and matcher-less `SubagentStart`. Such hooks report `status: "approximated"` plus an `info` diagnostic describing the difference. Generated entrypoints enable them; the live extension enables them only when `OMP_HOOKS_PLUS_APPROXIMATE=1` is set. A `SubagentStart` matcher naming an agent type stays unsupported, because OMP does not expose it.
+
+`--json` prints the structured report. Reports identify declaration locations and statuses without copying command bodies or settings values. Additive schema-version-1 fields identify `conversionLevel: "command-hook-adaptation"`, detected `nativeBindings` with `status: "not-reused"`, effective `activation`, `options` (`skipUnsupported`, `approximate`), and `output.omittedResources`. Successful adaptation does not reproduce native commands, recovery tools, provider integration, system-prompt ownership, or native session state. Generated definitions and copied resources still contain executable source and must be reviewed as code.
 
 ## Non-goals
 

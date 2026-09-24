@@ -52,6 +52,9 @@ export type HooksConfig = {
   post_tool_use_failure?: HookGroup[];
   user_prompt_submit?: HookGroup[];
   stop?: HookGroup[];
+  // Approximated events: only generated extensions converted with --approximate run these.
+  Notification?: HookGroup[];
+  SubagentStart?: HookGroup[];
 };
 
 export type SettingsFile = {
@@ -68,7 +71,9 @@ export type HookEventName =
   | "PostToolUse"
   | "PostToolUseFailure"
   | "UserPromptSubmit"
-  | "Stop";
+  | "Stop"
+  | "Notification"
+  | "SubagentStart";
 
 export type HookMatcherValue<T extends HookEventName> =
   T extends "SessionStart" ? SessionStartMatcher
@@ -106,6 +111,11 @@ export interface HookExecutionContext {
   toolResponse?: Record<string, unknown>;
   error?: string;
   isInterrupt?: boolean;
+  // Notification fields (approximated)
+  notificationType?: string;
+  message?: string;
+  // SubagentStart fields (approximated)
+  agentId?: string;
   // Async command hooks can deliver additionalContext after the foreground event.
   asyncContextSink?: (
     content: string,

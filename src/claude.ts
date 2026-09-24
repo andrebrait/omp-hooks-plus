@@ -28,6 +28,16 @@ export const HOOK_KEYS: Array<keyof HooksConfig> = [
   "stop",
 ];
 
+/**
+ * Claude events with a near-equivalent OMP trigger. Only generated extensions
+ * converted with `--approximate` run them; the value explains the difference.
+ */
+export const APPROXIMATIONS: Record<"Notification" | "SubagentStart", string> = {
+  Notification: "Approximated: permission_prompt fires on OMP tool_approval_requested; idle_prompt fires when a top-level agent run ends (agent_end), immediately rather than after Claude Code's 60-second idle delay. Other notification types never fire; hook output is ignored, as in Claude Code.",
+  SubagentStart: "Approximated: fires before the first run of an OMP subagent session (a session file nested under its parent's), delivering context to that subagent. OMP does not expose the agent type, so only groups without a matcher (or with \"*\") are approximated; in-memory subagent sessions are not detected.",
+};
+export const APPROXIMATED_KEYS = Object.keys(APPROXIMATIONS) as Array<keyof typeof APPROXIMATIONS>;
+
 
 const CLAUDE_TOOL_NAMES: Record<string, string> = {
   bash: "Bash",
@@ -111,7 +121,7 @@ function parseHookGroup(value: unknown): HookGroup | undefined {
   };
 }
 
-export function parseSettings(value: unknown): SettingsFile | undefined {
+export function parseSettings(value: unknown, keys: Array<keyof HooksConfig> = HOOK_KEYS): SettingsFile | undefined {
   if (!isRecord(value)) return undefined;
   if (
     value.disableAllHooks !== undefined &&
@@ -123,7 +133,7 @@ export function parseSettings(value: unknown): SettingsFile | undefined {
 
   const hooks: HooksConfig = {};
   if (isRecord(value.hooks)) {
-    for (const key of HOOK_KEYS) {
+    for (const key of keys) {
       const rawGroups = value.hooks[key];
       if (!Array.isArray(rawGroups)) continue;
       const groups = rawGroups
@@ -173,6 +183,10 @@ export function getHookGroups(
       ];
     case "Stop":
       return [...(hooks.Stop ?? []), ...(hooks.stop ?? [])];
+    case "Notification":
+      return hooks.Notification ?? [];
+    case "SubagentStart":
+      return hooks.SubagentStart ?? [];
     default:
       return [];
   }

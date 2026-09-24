@@ -1,12 +1,17 @@
 import { spawn } from "node:child_process";
 import {
   isInternalUrlPath,
-  isReadableUrlPath,
   resolveReadPath,
   splitPathAndSelPreferringLiteralSync,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { toClaudeToolName } from "./claude";
 import type { Hook, HookExecutionContext } from "./types";
+
+// OMP 18.3 moved this predicate to @oh-my-pi/pi-tui, which the host does not provide
+// to extensions; importing it from pi-coding-agent fails to load there. Local copy.
+function isReadableUrlPath(value: string): boolean {
+  return /^https?:\/\/?/i.test(value) || /^www\./i.test(value);
+}
 
 // ============================================================================
 // Hook executor
@@ -118,6 +123,14 @@ export function buildHookInput(ctx: HookExecutionContext): object {
     }
 
     return toolInput;
+  }
+
+  if (ctx.hookEventName === "Notification") {
+    return { ...base, message: ctx.message, notification_type: ctx.notificationType };
+  }
+
+  if (ctx.hookEventName === "SubagentStart") {
+    return { ...base, agent_id: ctx.agentId };
   }
 
   if (ctx.hookEventName === "SessionEnd") {

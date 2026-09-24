@@ -8,12 +8,15 @@ import { formatDoctorReport } from "./doctor";
 // ============================================================================
 
 export default function (pi: ExtensionAPI) {
+  // Opt-in, like the converter's --approximate: near-equivalents for Claude events OMP lacks.
+  const approximate = process.env.OMP_HOOKS_PLUS_APPROXIMATE === "1";
   registerHooks(pi, async (ctx) => {
     const loaded = await loadSettings(ctx.cwd, {
       projectTrusted: ctx.isProjectTrusted(),
+      approximate,
     });
     return loaded.settings;
-  });
+  }, { approximations: approximate });
   pi.registerCommand("claude-compat", {
     description: "Show effective Claude hook compatibility settings",
     handler: async (args, ctx) => {
@@ -23,6 +26,7 @@ export default function (pi: ExtensionAPI) {
       }
       const loaded = await loadSettings(ctx.cwd, {
         projectTrusted: ctx.isProjectTrusted(),
+        approximate,
       });
       ctx.ui.notify(formatDoctorReport(loaded), "info");
     },

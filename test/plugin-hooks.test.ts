@@ -13,6 +13,7 @@ import { disableProvider, enableProvider, isProviderEnabled } from "@oh-my-pi/pi
 import { getHookGroups } from "../src/claude";
 import { loadSettings } from "../src/config";
 import { triggerSessionHooks } from "../src/hooks/session-hooks";
+import extension from "../src/omp-hooks";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -449,4 +450,46 @@ describe("plugin hook execution", () => {
     expect(result.additionalContext).toBe("SAFE-CONTENT");
     expect(existsSync(path.join(repo, "INJECTED"))).toBe(false);
   });
+});
+
+test("OMP_HOOKS_PLUS_APPROXIMATE=1 enables approximated events in the on-the-fly extension", async () => {
+  const previous = process.env.OMP_HOOKS_PLUS_APPROXIMATE;
+  try {
+    for (const [value, expected] of [[undefined, false], ["0", false], ["1", true]] as const) {
+      if (value === undefined) delete process.env.OMP_HOOKS_PLUS_APPROXIMATE;
+      else process.env.OMP_HOOKS_PLUS_APPROXIMATE = value;
+      const events: string[] = [];
+      extension({ on: (name: string) => events.push(name), registerCommand: () => {}, sendMessage: () => {} } as never);
+      expect(events.includes("tool_approval_requested")).toBe(expected);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.OMP_HOOKS_PLUS_APPROXIMATE;
+    else process.env.OMP_HOOKS_PLUS_APPROXIMATE = previous;
+  }
+});
+
+test("plugin diagnostics name the declaring file, and typed SubagentStart matchers are reported rather than loaded", async () => {
+  const root = tempRoot();
+  const home = path.join(root, "home");
+  const repo = path.join(root, "repo");
+  const plugin = path.join(home, "plugin-typed");
+  mkdirSync(path.join(repo, ".git"), { recursive: true });
+  const manifest = path.join(plugin, ".claude-plugin", "plugin.json");
+  writeJson(manifest, {
+    name: "typed-fixture",
+    hooks: {
+      SubagentStop: [{ hooks: [{ type: "command", command: "echo stop" }] }],
+      SubagentStart: [
+        { matcher: "Explore", hooks: [{ type: "command", command: "echo typed" }] },
+        { hooks: [{ type: "command", command: "echo any" }] },
+      ],
+    },
+  });
+  registerUserPlugins(home, { "typed-fixture@test": plugin });
+
+  const loaded = await loadSettings(repo, { home, projectTrusted: false, approximate: true });
+
+  expect(loaded.unsupported).toContain(`Claude plugin hook event "SubagentStop" in ${manifest} is not supported`);
+  expect(loaded.unsupported).toContain(`SubagentStart matcher "Explore" in ${manifest} is not supported: OMP does not expose a subagent's agent type`);
+  expect(getHookGroups(loaded.settings, "SubagentStart").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["echo any"]);
 });

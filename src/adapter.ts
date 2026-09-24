@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { createHookContext } from "./hook-context";
+import { registerApproximatedHooks } from "./hooks/approximated-hooks";
 import { registerCompactHooks } from "./hooks/compact-hooks";
 import { registerPromptHooks } from "./hooks/prompt-hooks";
 import { registerSessionHooks } from "./hooks/session-hooks";
@@ -11,6 +12,7 @@ export { findProjectRoot } from "./helpers";
 export function registerHooks(
   pi: ExtensionAPI,
   settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>,
+  options: { approximations?: boolean } = {},
 ): void {
   const shared = createHookContext(pi, settingsFor);
   registerSessionHooks(pi, shared);
@@ -18,4 +20,5 @@ export function registerHooks(
   registerPromptHooks(pi, shared);
   registerStopHooks(pi, shared);
   registerToolHooks(pi, shared);
+  if (options.approximations) registerApproximatedHooks(pi, shared);
 }

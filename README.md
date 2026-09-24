@@ -103,13 +103,25 @@ Synchronous tool hooks deliver structured `additionalContext` before the next mo
 
 Hook context reaches the model the way Claude Code presents it: as a system reminder that names the hook, for example `<system-reminder>\nPreToolUse:Bash hook additional context: …\n</system-reminder>`. Tool events carry the Claude tool name (`PreToolUse:Read`, `PostToolUseFailure:Bash`); other events carry the event name (`SessionStart`, `UserPromptSubmit`, `Stop`). This applies equally to the on-the-fly adapter and to converted extensions, which bundle the same runtime.
 
+### Approximated events
+
+Two Claude events have no direct OMP counterpart but a near-equivalent trigger. They are off by default. Enable them in the live extension with `OMP_HOOKS_PLUS_APPROXIMATE=1`, or in a conversion with `--approximate`:
+
+| Claude event | OMP trigger | Difference |
+| --- | --- | --- |
+| `Notification` `permission_prompt` | `tool_approval_requested` | Message is `Claude needs your permission to use <Tool>`. |
+| `Notification` `idle_prompt` | a top-level `agent_end` that will not continue | Fires immediately, not after Claude Code's 60-second idle delay. |
+| `SubagentStart` | first `before_agent_start` of a subagent session (a session file nested under its parent's) | Only groups without a matcher (or `*`); OMP does not expose the agent type. In-memory (`--no-session`) subagents are not detected. |
+
+Other notification types never fire. `/claude-compat doctor` lists the enabled approximations.
+
 ## Current limits
 
 The compatibility layer intentionally does not load:
 
 - organization-managed Claude policy hooks
 - non-command handlers such as `http`, `prompt`, `agent`, and `mcp_tool` (including from a plugin manifest)
-- hook event kinds beyond the nine listed [above](#supported-command-hooks) (including from a plugin manifest — Claude Code defines 30+ event kinds in total)
+- hook event kinds beyond the nine listed [above](#supported-command-hooks) and the opt-in [approximated events](#approximated-events) (including from a plugin manifest — Claude Code defines 30+ event kinds in total). The doctor lists each such event with the settings file or plugin that declares it.
 
 Plugin manifests and hook configuration files are re-read whenever hook settings are loaded, just like user settings. OMP caches installed-plugin roots separately; refresh plugin discovery after manually editing a plugin registry.
 
@@ -141,7 +153,7 @@ bun run convert /project/.claude/settings.json \
   --out /path/to/new-output --json
 ```
 
-`--include` may be repeated. For plugin directories, supplying it restricts resource copying to the selected paths; omitting it copies all eligible resources. Declaration inventory always covers the whole plugin, including scoped hooks outside selected resources. Reports distinguish excluded resources from resources omitted by selection; neither category proves a file is unnecessary. Included resources are available through `CLAUDE_PLUGIN_ROOT`; ordinary relative commands retain the active project's working directory. Output must be a new directory outside the source root, and its parent must already exist. Disable overlapping original hooks before enabling generated hooks.
+`--include` may be repeated. For plugin directories, supplying it restricts resource copying to the selected paths; omitting it copies all eligible resources. Declaration inventory always covers the whole plugin, including scoped hooks outside selected resources. Reports distinguish excluded resources from resources omitted by selection; neither category proves a file is unnecessary. A hook command that literally names a resource through `CLAUDE_PLUGIN_ROOT` (for example `"${CLAUDE_PLUGIN_ROOT}/hooks/run.sh"`) that is not copied fails the conversion, even with `--skip-unsupported`; paths a script builds at runtime are not checked. Included resources are available through `CLAUDE_PLUGIN_ROOT`; ordinary relative commands retain the active project's working directory. Output must be a new directory outside the source root, and its parent must already exist. Disable overlapping original hooks before enabling generated hooks.
 
 Generated hooks default to `--activation enabled`: they run wherever OMP enables the extension, including untrusted projects. This preserves global policy hooks. For hooks that must not run in untrusted projects, select `--activation project-trusted`; the generated adapter checks OMP's current project trust before each settings lookup, including cached settings. Both modes preserve `disableAllHooks`. This is an execution gate, not a sandbox, and it does not change the automatic extension's existing user/project discovery and trust rules.
 
@@ -151,7 +163,12 @@ bun run convert /path/to/claude-plugin \
   --out /path/to/new-output
 ```
 
-Exit codes: **0** supported, **1** invalid input/operational failure, **2** unsupported declarations or resources. Unsupported input produces a report only, never a partial runnable extension. `--dry-run` writes nothing; `--json` prints the inventory report.
+Exit codes: **0** supported, **1** invalid input/operational failure, **2** unsupported declarations or resources. By default, unsupported input produces a report only, never a partial runnable extension. `--skip-unsupported` converts the supported hooks anyway and lists every skipped declaration in the report; a command that embeds the original source root still fails with exit 2. `--approximate` converts the [approximated events](#approximated-events). `--dry-run` writes nothing; `--json` prints the inventory report.
+
+```sh
+# A Claude settings.json with SubagentStart and Notification hooks, converted whole:
+bun run convert ~/.claude/settings.json --approximate --skip-unsupported --out /path/to/new-output
+```
 
 The converter inventories unsupported events, non-command handlers, unknown hook fields, and scoped frontmatter hooks rather than dropping them. String `statusMessage` metadata is accepted, with an explicit report that its UI presentation is not reproduced; malformed metadata remains invalid. Selected resource symlinks remain unsupported, and explicit includes cannot traverse symlinks. Unselected symlinks are reported as omitted without being followed; declaration containment checks still apply independently.
 

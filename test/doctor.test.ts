@@ -30,6 +30,7 @@ describe("compatibility doctor", () => {
       },
       warnings: [],
       unsupported: ["Claude plugin hooks are not loaded"],
+      approximated: [],
     };
 
     const report = formatDoctorReport(loaded);

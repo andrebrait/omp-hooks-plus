@@ -1,5 +1,5 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, rmSync, symlinkSync } from "node:fs";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -12,6 +12,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { convertHooks } from "../src/convert";
 import type { ConvertOptions } from "../src/convert";
 import * as conversionSource from "../src/conversion-source";
+import { registerHooks } from "../src/adapter";
 
 const temporary: string[] = [];
 afterEach(() => { for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -371,6 +372,138 @@ test("generated tool hooks deliver context as Claude Code's named hook reminder"
   }
 });
 
+// Claude Code 2.1.277 events outside the adapter's native set, plus one native hook.
+function mixedEvents(plugin: string, subagentMatcher?: string) {
+  const record = (name: string) => ({ type: "command", command: `{ cat; echo; } >> "$CLAUDE_PROJECT_DIR/${name}.json"` });
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
+    PreToolUse: [{ matcher: "Bash", hooks: [record("pre")] }],
+    Notification: [{ matcher: "permission_prompt", hooks: [record("permission")] }, { matcher: "idle_prompt", hooks: [record("idle")] }],
+    SubagentStart: [{ ...(subagentMatcher ? { matcher: subagentMatcher } : {}), hooks: [{ type: "command", command: `printf '%s' '${JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "DELEGATE MODES" } })}'` }] }],
+    SubagentStop: [{ hooks: [record("subagent-stop")] }],
+  } }));
+}
+
+test("skipping unsupported declarations converts the rest and reports every skipped hook", async () => {
+  const { plugin, out, root } = fixture();
+  mixedEvents(plugin);
+  const strict = await convertHooks(plugin, { out: path.join(root, "strict") });
+  expect(strict.exitCode).toBe(2);
+  expect(existsSync(path.join(root, "strict", "index.ts"))).toBe(false);
+
+  const result = await convertHooks(plugin, { out, skipUnsupported: true });
+  expect(result.exitCode).toBe(0);
+  expect(result.report.options).toEqual({ skipUnsupported: true, approximate: false });
+  expect(result.report.hooks.map(({ event, status }) => [event, status])).toEqual([
+    ["PreToolUse", "supported"],
+    ["Notification", "unsupported"], ["Notification", "unsupported"],
+    ["SubagentStart", "unsupported"],
+    ["SubagentStop", "unsupported"],
+  ]);
+  const generated = readFileSync(path.join(out, "index.ts"), "utf8");
+  expect(generated).toContain('"PreToolUse"');
+  for (const skipped of ["Notification", "SubagentStart", "SubagentStop"]) expect(generated).not.toContain(`"${skipped}"`);
+});
+
+test("skipping unsupported declarations never emits a command that embeds the original source root", async () => {
+  const { plugin, out } = fixture();
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
+    PreToolUse: [{ hooks: [{ type: "command", command: `node ${plugin}/hooks/guard.cjs` }] }],
+  } }));
+  const result = await convertHooks(plugin, { out, skipUnsupported: true });
+  expect(result.exitCode).toBe(2);
+  expect(existsSync(path.join(out, "index.ts"))).toBe(false);
+});
+
+test("approximations cover Notification and unmatched SubagentStart; other events stay unsupported", async () => {
+  const { plugin, root } = fixture();
+  mixedEvents(plugin);
+  const approximate = await convertHooks(plugin, { dryRun: true, approximate: true });
+  expect(approximate.exitCode).toBe(2); // SubagentStop has no approximation
+  expect(approximate.report.hooks.map(({ event, status }) => [event, status])).toEqual([
+    ["PreToolUse", "supported"],
+    ["Notification", "approximated"], ["Notification", "approximated"],
+    ["SubagentStart", "approximated"],
+    ["SubagentStop", "unsupported"],
+  ]);
+  expect(approximate.report.diagnostics.some(item => item.level === "info" && item.pointer === "/hooks/Notification"
+    && item.message.includes("tool_approval_requested"))).toBe(true);
+
+  // OMP does not expose a subagent's agent type, so a typed SubagentStart matcher cannot be approximated.
+  const typed = path.join(root, "typed");
+  cpSync(plugin, typed, { recursive: true });
+  mixedEvents(typed, "Explore");
+  const typedResult = await convertHooks(typed, { dryRun: true, approximate: true, skipUnsupported: true });
+  expect(typedResult.report.hooks.find(hook => hook.event === "SubagentStart")?.status).toBe("unsupported");
+});
+
+test("generated approximations notify on approval requests and idle stops, and brief subagents only", async () => {
+  const { plugin, project, out } = fixture();
+  mixedEvents(plugin);
+  const cli = fileURLToPath(new URL("../src/convert.ts", import.meta.url));
+  const run = Bun.spawn([process.execPath, cli, plugin, "--out", out, "--approximate", "--skip-unsupported"], { stdout: "pipe", stderr: "pipe" });
+  expect(await run.exited).toBe(0);
+  const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+  expect(loaded.errors).toEqual([]);
+  const handlers = loaded.extensions[0].handlers;
+  const emit = async (event: { type: string; [key: string]: unknown }, sessionFile?: string) => {
+    const ctx = { cwd: project, sessionManager: { getSessionFile: () => sessionFile }, ui: { notify: () => {} }, isProjectTrusted: () => true, hasUI: false };
+    const results = [];
+    for (const handler of handlers.get(event.type) ?? []) results.push(await handler(event as never, ctx as never));
+    return results.filter(Boolean);
+  };
+  // CLAUDE_PROJECT_DIR is the git root above the nested project. Notification hooks run
+  // detached from the host event, so wait (bounded) until `count` records have landed.
+  const records = async (name: string, count: number) => {
+    const file = path.join(project, "..", `${name}.json`);
+    const read = () => existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+    const deadline = Date.now() + 10_000;
+    while (read().length < count && Date.now() < deadline) await Bun.sleep(20);
+    return read().map(line => JSON.parse(line));
+  };
+  try {
+    // A top-level session is not a subagent: no SubagentStart briefing.
+    const sessions = path.join(project, "..", "sessions");
+    mkdirSync(path.join(sessions, "parent"), { recursive: true });
+    writeFileSync(path.join(sessions, "parent.jsonl"), "");
+    expect(await emit({ type: "before_agent_start", prompt: "hi", images: [], systemPrompt: [] }, path.join(sessions, "parent.jsonl"))).toEqual([]);
+    // OMP writes a subagent's session to `<parent>/<agentId>.jsonl` beside `<parent>.jsonl`.
+    const child = path.join(sessions, "parent", "0-Explore.jsonl");
+    const briefing = await emit({ type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] }, child);
+    expect(briefing).toEqual([{ message: expect.objectContaining({
+      content: "<system-reminder>\nSubagentStart hook additional context: DELEGATE MODES\n</system-reminder>", display: false,
+    }) }]);
+    // Once per subagent session, like Claude's single SubagentStart at spawn.
+    expect(await emit({ type: "before_agent_start", prompt: "again", images: [], systemPrompt: [] }, child)).toEqual([]);
+
+    // Neither an automatic continuation nor a finishing subagent is the user's idle prompt.
+    await emit({ type: "agent_end", messages: [], willContinue: true });
+    await emit({ type: "agent_end", messages: [] }, child);
+    await emit({ type: "agent_end", messages: [] });
+    await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "bash", approvalMode: "ask" });
+    expect(await records("permission", 1)).toEqual([expect.objectContaining({ hook_event_name: "Notification", notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" })]);
+    expect(await records("idle", 1)).toEqual([expect.objectContaining({ hook_event_name: "Notification", notification_type: "idle_prompt", message: "Claude is waiting for your input" })]);
+    // Barrier: a later hook has finished, so an earlier spurious idle record would have landed too.
+    await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "u", toolName: "read", approvalMode: "ask" });
+    expect(await records("permission", 2)).toHaveLength(2);
+    expect(await records("idle", 1)).toHaveLength(1);
+  } finally {
+    await emit({ type: "session_shutdown" });
+  }
+}, 30_000);
+
+test("the on-the-fly adapter never runs approximated events", async () => {
+  const { plugin, project } = fixture();
+  mixedEvents(plugin);
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  const settings = { hooks: JSON.parse(readFileSync(path.join(plugin, "hooks/hooks.json"), "utf8")).hooks };
+  registerHooks(pi as never, async () => settings as never);
+  expect(handlers.has("tool_approval_requested")).toBe(false);
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  for (const handler of handlers.get("agent_end") ?? []) await handler({ type: "agent_end", messages: [] }, ctx);
+  expect(existsSync(path.join(project, "..", "idle.json"))).toBe(false);
+});
+
 test.each(["symlink", "directory"])("source root replacement before resource collection fails closed (%s)", async (kind) => {
   const { root, plugin, out } = fixture();
   const replacement = path.join(root, "replacement");
@@ -409,4 +542,72 @@ test("unrelated absolute path prefixes do not masquerade as source-root referenc
     }));
     expect((await convertHooks(plugin, { dryRun: true })).exitCode).toBe(2);
   }
+});
+
+test("a slow Notification hook never delays the approval prompt or the next turn", async () => {
+  const { project } = fixture();
+  const release = path.join(project, "release");
+  const recorded = path.join(project, "notified.jsonl");
+  // Blocks until the test releases it, like a notifier waiting on the network.
+  const command = `while [ ! -f "${release}" ]; do sleep 0.05; done; { cat; echo; } >> "${recorded}"`;
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  registerHooks(pi as never, async () => ({ hooks: { Notification: [{ hooks: [{ type: "command", command }] }] } }), { approximations: true });
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const emit = (event: { type: string; [key: string]: unknown }) => Promise.all((handlers.get(event.type) ?? []).map(handler => handler(event, ctx)));
+  await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "read", approvalMode: "ask" });
+  await emit({ type: "agent_end", messages: [] });
+  expect(existsSync(recorded)).toBe(false);
+  writeFileSync(release, "");
+  // Real hook processes finish on their own clock; wait for both records, bounded.
+  const deadline = Date.now() + 10_000;
+  while ((existsSync(recorded) ? readFileSync(recorded, "utf8").trim().split("\n").length : 0) < 2 && Date.now() < deadline) await Bun.sleep(20);
+  expect(readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line).notification_type).sort()).toEqual(["idle_prompt", "permission_prompt"]);
+});
+
+test("a blocking Stop hook's continuation is not reported as an idle prompt", async () => {
+  const { project } = fixture();
+  const recorded = path.join(project, "notified.jsonl");
+  const record = { type: "command", command: `{ cat; echo; } >> "${recorded}"` };
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  registerHooks(pi as never, async () => ({ hooks: {
+    Stop: [{ hooks: [{ type: "command", command: `printf '%s' '{"decision":"block","reason":"Run the tests."}'` }] }],
+    Notification: [{ hooks: [record] }],
+  } }), { approximations: true });
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  // OMP runs agent_end handlers in registration order, awaiting each.
+  const emit = async (event: { type: string; [key: string]: unknown }) => { for (const handler of handlers.get(event.type) ?? []) await handler(event, ctx); };
+  await emit({ type: "agent_end", messages: [] });
+  // Barrier: once this later detached hook has recorded, an idle record would have too.
+  await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "read", approvalMode: "ask" });
+  const deadline = Date.now() + 10_000;
+  while (!(existsSync(recorded) && readFileSync(recorded, "utf8").includes("permission_prompt")) && Date.now() < deadline) await Bun.sleep(20);
+  expect(readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line).notification_type)).toEqual(["permission_prompt"]);
+});
+
+test("a hook that names a plugin resource left out by --include cannot convert", async () => {
+  const { plugin, out } = fixture();
+  writeFileSync(path.join(plugin, "selected.txt"), "selected");
+  // fixture()'s hook runs node "${CLAUDE_PLUGIN_ROOT}/hooks/guard.cjs".
+  const result = await convertHooks(plugin, { out, include: ["selected.txt"] });
+  expect(result.exitCode).toBe(2);
+  expect(existsSync(path.join(out, "index.ts"))).toBe(false);
+  expect(result.report.diagnostics).toContainEqual(expect.objectContaining({
+    level: "unsupported",
+    message: "A hook command references hooks/guard.cjs through CLAUDE_PLUGIN_ROOT, but that resource is not copied; add --include hooks/guard.cjs",
+  }));
+  // Still not skippable: the hook itself would be emitted and fail at runtime.
+  expect((await convertHooks(plugin, { dryRun: true, include: ["selected.txt"], skipUnsupported: true })).exitCode).toBe(2);
+  expect((await convertHooks(plugin, { dryRun: true, include: ["hooks/guard.cjs"] })).exitCode).toBe(0);
+});
+
+test("a dangling resource symlink is reported as a missing target", async () => {
+  const { root, plugin } = fixture();
+  symlinkSync(path.join(root, "gone", "CLAUDE.md"), path.join(plugin, "AGENTS.md"));
+  const result = await convertHooks(plugin, { dryRun: true });
+  expect(result.report.diagnostics).toContainEqual({
+    level: "unsupported", file: "AGENTS.md",
+    message: "Resource symlink target does not exist; restore the target or remove the link before conversion",
+  });
 });
