@@ -374,7 +374,7 @@ test("generated tool hooks deliver context as Claude Code's named hook reminder"
 
 // Claude Code 2.1.277 events outside the adapter's native set, plus one native hook.
 function mixedEvents(plugin: string, subagentMatcher?: string) {
-  const record = (name: string) => ({ type: "command", command: `cat > "$CLAUDE_PROJECT_DIR/${name}.json"` });
+  const record = (name: string) => ({ type: "command", command: `{ cat; echo; } >> "$CLAUDE_PROJECT_DIR/${name}.json"` });
   writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
     PreToolUse: [{ matcher: "Bash", hooks: [record("pre")] }],
     Notification: [{ matcher: "permission_prompt", hooks: [record("permission")] }, { matcher: "idle_prompt", hooks: [record("idle")] }],
@@ -451,16 +451,16 @@ test("generated approximations notify on approval requests and idle stops, and b
     for (const handler of handlers.get(event.type) ?? []) results.push(await handler(event as never, ctx as never));
     return results.filter(Boolean);
   };
-  // CLAUDE_PROJECT_DIR is the git root above the nested project.
-  const recorded = (name: string) => JSON.parse(readFileSync(path.join(project, "..", `${name}.json`), "utf8"));
+  // CLAUDE_PROJECT_DIR is the git root above the nested project. Notification hooks run
+  // detached from the host event, so wait (bounded) until `count` records have landed.
+  const records = async (name: string, count: number) => {
+    const file = path.join(project, "..", `${name}.json`);
+    const read = () => existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean) : [];
+    const deadline = Date.now() + 10_000;
+    while (read().length < count && Date.now() < deadline) await Bun.sleep(20);
+    return read().map(line => JSON.parse(line));
+  };
   try {
-    await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "bash", approvalMode: "ask" });
-    expect(recorded("permission")).toMatchObject({ hook_event_name: "Notification", notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" });
-    await emit({ type: "agent_end", messages: [], willContinue: true });
-    expect(existsSync(path.join(project, "..", "idle.json"))).toBe(false);
-    await emit({ type: "agent_end", messages: [] });
-    expect(recorded("idle")).toMatchObject({ hook_event_name: "Notification", notification_type: "idle_prompt", message: "Claude is waiting for your input" });
-
     // A top-level session is not a subagent: no SubagentStart briefing.
     const sessions = path.join(project, "..", "sessions");
     mkdirSync(path.join(sessions, "parent"), { recursive: true });
@@ -474,10 +474,18 @@ test("generated approximations notify on approval requests and idle stops, and b
     }) }]);
     // Once per subagent session, like Claude's single SubagentStart at spawn.
     expect(await emit({ type: "before_agent_start", prompt: "again", images: [], systemPrompt: [] }, child)).toEqual([]);
-    // A subagent finishing is not the user's idle prompt.
-    rmSync(path.join(project, "..", "idle.json"));
+
+    // Neither an automatic continuation nor a finishing subagent is the user's idle prompt.
+    await emit({ type: "agent_end", messages: [], willContinue: true });
     await emit({ type: "agent_end", messages: [] }, child);
-    expect(existsSync(path.join(project, "..", "idle.json"))).toBe(false);
+    await emit({ type: "agent_end", messages: [] });
+    await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "bash", approvalMode: "ask" });
+    expect(await records("permission", 1)).toEqual([expect.objectContaining({ hook_event_name: "Notification", notification_type: "permission_prompt", message: "Claude needs your permission to use Bash" })]);
+    expect(await records("idle", 1)).toEqual([expect.objectContaining({ hook_event_name: "Notification", notification_type: "idle_prompt", message: "Claude is waiting for your input" })]);
+    // Barrier: a later hook has finished, so an earlier spurious idle record would have landed too.
+    await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "u", toolName: "read", approvalMode: "ask" });
+    expect(await records("permission", 2)).toHaveLength(2);
+    expect(await records("idle", 1)).toHaveLength(1);
   } finally {
     await emit({ type: "session_shutdown" });
   }
@@ -534,4 +542,25 @@ test("unrelated absolute path prefixes do not masquerade as source-root referenc
     }));
     expect((await convertHooks(plugin, { dryRun: true })).exitCode).toBe(2);
   }
+});
+
+test("a slow Notification hook never delays the approval prompt or the next turn", async () => {
+  const { project } = fixture();
+  const release = path.join(project, "release");
+  const recorded = path.join(project, "notified.jsonl");
+  // Blocks until the test releases it, like a notifier waiting on the network.
+  const command = `while [ ! -f "${release}" ]; do sleep 0.05; done; { cat; echo; } >> "${recorded}"`;
+  const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
+  const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
+  registerHooks(pi as never, async () => ({ hooks: { Notification: [{ hooks: [{ type: "command", command }] }] } }), { approximations: true });
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const emit = (event: { type: string; [key: string]: unknown }) => Promise.all((handlers.get(event.type) ?? []).map(handler => handler(event, ctx)));
+  await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "read", approvalMode: "ask" });
+  await emit({ type: "agent_end", messages: [] });
+  expect(existsSync(recorded)).toBe(false);
+  writeFileSync(release, "");
+  // Real hook processes finish on their own clock; wait for both records, bounded.
+  const deadline = Date.now() + 10_000;
+  while ((existsSync(recorded) ? readFileSync(recorded, "utf8").trim().split("\n").length : 0) < 2 && Date.now() < deadline) await Bun.sleep(20);
+  expect(readFileSync(recorded, "utf8").trim().split("\n").map(line => JSON.parse(line).notification_type).sort()).toEqual(["idle_prompt", "permission_prompt"]);
 });

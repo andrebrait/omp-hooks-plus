@@ -19,24 +19,28 @@ function subagentSession(ctx: ExtensionContext): string | undefined {
 export function registerApproximatedHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   const briefed = new Set<string>();
 
-  const notification = async (ctx: ExtensionContext, notificationType: string, message: string) => {
-    await triggerSimpleHooks("Notification", notificationType, {
+  // OMP awaits these handlers before showing the approval prompt or ending the run, and
+  // Notification output is ignored, so hooks run detached: a slow notifier never blocks.
+  const notification = (ctx: ExtensionContext, notificationType: string, message: string) => {
+    void shared.settingsFor(ctx).then(settings => triggerSimpleHooks("Notification", notificationType, {
       sessionId: shared.getSessionId(ctx),
       cwd: ctx.cwd,
       hookEventName: "Notification",
       transcriptPath: ctx.sessionManager.getSessionFile(),
       notificationType,
       message,
-    }, await shared.settingsFor(ctx), (msg, type) => shared.notify(ctx, msg, type));
+    }, settings, (msg, type) => shared.notify(ctx, msg, type))).catch(error => {
+      shared.notify(ctx, `Notification hook failed: ${String(error)}`, "error");
+    });
   };
 
   pi.on("tool_approval_requested", (event, ctx) =>
     notification(ctx, "permission_prompt", `Claude needs your permission to use ${toClaudeToolName(event.toolName)}`));
 
-  pi.on("agent_end", async (event, ctx) => {
+  pi.on("agent_end", (event, ctx) => {
     // An automatic continuation or a finishing subagent is not waiting for the user.
     if (event.willContinue || subagentSession(ctx)) return;
-    await notification(ctx, "idle_prompt", "Claude is waiting for your input");
+    notification(ctx, "idle_prompt", "Claude is waiting for your input");
   });
 
   pi.on("before_agent_start", async (_event, ctx) => {
