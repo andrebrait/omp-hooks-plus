@@ -319,7 +319,7 @@ export async function convertHooks(input: string, options: ConvertOptions = {}):
       // Publish the discoverable entrypoint last, in one no-replace filesystem operation.
       const temporary = path.join(destination!, ".entrypoint.tmp");
       writeFileSync(temporary, generatedEntrypoint(source, resourceHash.digest("hex"), activation, options.approximate === true,
-        options.sourceName ?? (source.kind === "plugin" ? source.name : "omp-hooks-plus")), { flag: "wx" });
+        options.sourceName ?? source.pluginName ?? "omp-hooks-plus"), { flag: "wx" });
       linkSync(temporary, path.join(destination!, "index.ts"));
       unlinkSync(temporary);
     }

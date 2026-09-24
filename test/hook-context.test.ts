@@ -206,3 +206,15 @@ test("each ephemeral session receives startup context once after a session reset
   jest.advanceTimersByTime(70);
   expect(messages).toEqual([r("bootstrap"), r("bootstrap")]);
 });
+
+test("the same text from two sources reaches the model once per source", () => {
+  const messages: string[] = [];
+  const shared = context(messages);
+  shared.injectHiddenContext("same", { hookEventName: "SessionStart", source: "plugin-a" }, false, "aside");
+  shared.injectHiddenContext("same", { hookEventName: "SessionStart", source: "plugin-b" }, false, "aside");
+  shared.injectHiddenContext("same", { hookEventName: "SessionStart", source: "plugin-a" }, false, "aside");
+  expect(messages).toEqual([
+    reminder("SessionStart", "same").replace('source="omp-hooks-plus"', 'source="plugin-a"'),
+    reminder("SessionStart", "same").replace('source="omp-hooks-plus"', 'source="plugin-b"'),
+  ]);
+});

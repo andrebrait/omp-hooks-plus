@@ -677,3 +677,20 @@ test("reminder attributes are escaped and an unanswered tool call leaves nothing
   await emit("agent_end", { messages: [] });
   expect(await emit("tool_result", { ...call, toolCallId: "orphan", content: [], isError: false })).toBeUndefined();
 });
+
+test("a converted plugin without a manifest name falls back to omp-hooks-plus, never its directory name", async () => {
+  const { plugin, project, root } = fixture();
+  writeFileSync(path.join(plugin, ".claude-plugin/plugin.json"), JSON.stringify({}));
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ type: "command", command: `printf '%s' '{"additionalContext":"ctx"}'` }] }] } }));
+  const out = path.join(root, "unnamed");
+  expect((await convertHooks(plugin, { out })).exitCode).toBe(0);
+  const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+  const handlers = loaded.extensions[0].handlers;
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} }, isProjectTrusted: () => true };
+  const call = { toolName: "bash", toolCallId: "u", input: {} };
+  for (const handler of handlers.get("tool_call") ?? []) await handler({ type: "tool_call", ...call } as never, ctx as never);
+  const [handler] = handlers.get("tool_result") ?? [];
+  const result = await handler({ type: "tool_result", ...call, content: [], isError: false } as never, ctx as never) as { content: Array<{ text: string }> };
+  expect(result.content[0].text.split("\n")[0]).toBe('<system-reminder source="omp-hooks-plus" event="PreToolUse" tool="bash">');
+  await handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown" } as never, ctx as never);
+});

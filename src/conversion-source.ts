@@ -35,6 +35,8 @@ export type ConversionSource = {
   rootIdentity: { realPath: string; dev: number; ino: number };
   kind: "plugin" | "file";
   name: string;
+  /** The plugin manifest's valid `name`, when it declares one. */
+  pluginName?: string;
   settings: SettingsFile;
   declarationFiles: string[];
   report: ConversionReport;
@@ -109,6 +111,7 @@ export async function loadConversionSource(
   };
   const declarationFiles = new Set<string>();
   const merged: SettingsFile = {};
+  let pluginName: string | undefined;
   const diagnostic = (level: "error" | "unsupported" | "info", location: Location, message: string) => {
     report.diagnostics.push({ level, ...location, message });
   };
@@ -453,7 +456,7 @@ export async function loadConversionSource(
       else if (value !== undefined) diagnostic("error", manifestLocation, "Plugin manifest must be a JSON object.");
     }
     if ("name" in manifest) {
-      if (typeof manifest.name === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.name)) report.source.name = manifest.name;
+      if (typeof manifest.name === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(manifest.name)) { report.source.name = manifest.name; pluginName = manifest.name; }
       else diagnostic("error", child(manifestLocation, "name"), "Plugin name must contain only letters, digits, dots, underscores, or hyphens.");
     }
     nativeBindings(manifest, manifestLocation.file);
@@ -490,5 +493,5 @@ export async function loadConversionSource(
     }
   }
   assertConversionRoot({ root, rootIdentity });
-  return { root, rootIdentity, kind, name: report.source.name, settings: merged, declarationFiles: [...declarationFiles], report };
+  return { root, rootIdentity, kind, name: report.source.name, pluginName, settings: merged, declarationFiles: [...declarationFiles], report };
 }

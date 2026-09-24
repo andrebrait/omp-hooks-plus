@@ -61,7 +61,7 @@ export function createHookContext(
   settingsFor: (ctx: ExtensionContext) => Promise<SettingsFile | undefined>,
 ): HookModuleContext {
   // Each adapter owns its own debounce queue and per-turn exact-content dedup.
-  // Dedup keys on the hook's raw text; the queue holds its labelled reminder.
+  // Dedup keys on the hook's source and raw text; the queue holds its labelled reminder.
   const injectBuffer: {
     entries: { raw: string; content: string }[];
     details: Record<string, unknown>;
@@ -115,7 +115,9 @@ export function createHookContext(
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
     injectHiddenContext: (raw, details, triggerTurn = false, delivery = "nextTurn") => {
-      if (!shared.claimInjectedContext(raw)) return;
+      // Dedup per source: identical text from another source still names that source.
+      const key = `${details.source ?? DEFAULT_SOURCE}\0${raw}`;
+      if (!shared.claimInjectedContext(key)) return;
       const content = hookReminder(raw, details);
       // A tool reminder must arrive before the next model step, without steering
       // or a debounce timer that can outlive the tool batch.
@@ -126,7 +128,7 @@ export function createHookContext(
         );
         return;
       }
-      injectBuffer.entries.push({ raw, content });
+      injectBuffer.entries.push({ raw: key, content });
       if (details) Object.assign(injectBuffer.details, details);
       clearTimeout(injectBuffer.timer);
       injectBuffer.timer = setTimeout(() => {
