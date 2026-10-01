@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
+import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import {
-  isInternalUrlPath,
   resolveReadPath,
   splitPathAndSelPreferringLiteralSync,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
@@ -82,10 +82,15 @@ export function buildHookInput(ctx: HookExecutionContext): object {
       if (typeof rawToolInput.path === "string" && rawToolInput.path && !rawToolInput.file_path) {
         if (toolName !== "Read") {
           toolInputAliases.file_path = rawToolInput.path;
-        } else if (!isInternalUrlPath(rawToolInput.path) && !isReadableUrlPath(rawToolInput.path) && !rawToolInput.path.includes("://")) {
-          // Keep the original path/selector for OMP-aware hooks; Claude hooks need the filesystem target.
-          const target = splitPathAndSelPreferringLiteralSync(rawToolInput.path, ctx.cwd);
-          toolInputAliases.file_path = resolveReadPath(target.path, ctx.cwd);
+        } else {
+          const router = InternalUrlRouter.instance();
+          const normalized = rawToolInput.path.replace(/^(local:)\/(?!\/)/, "$1//");
+          const isInternal = router.canHandle(normalized);
+          if (!isInternal && !isReadableUrlPath(rawToolInput.path) && !rawToolInput.path.includes("://")) {
+            // Keep the original path/selector for OMP-aware hooks; Claude hooks need the filesystem target.
+            const target = splitPathAndSelPreferringLiteralSync(rawToolInput.path, ctx.cwd);
+            toolInputAliases.file_path = resolveReadPath(target.path, ctx.cwd);
+          }
         }
       }
       // Read URLs remain opaque; never misrepresent them as local file paths.

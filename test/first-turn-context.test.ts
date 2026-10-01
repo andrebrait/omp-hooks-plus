@@ -15,7 +15,15 @@ import { registerToolHooks } from "../src/hooks/tool-hooks";
 
 for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] as const) {
   test(`${hookEventName} context reaches the next model step in the first user turn`, async () => {
-    type Handler = (event: unknown, ctx: ExtensionContext) => Promise<{ block?: boolean; reason?: string } | void>;
+    type HandlerResult = {
+      block?: boolean;
+      reason?: string;
+      additionalContext?: string;
+      content?: Array<{ type: "text"; text: string }>;
+      details?: unknown;
+      isError?: boolean;
+    };
+    type Handler = (event: unknown, ctx: ExtensionContext) => Promise<HandlerResult | void>;
     const handlers = new Map<string, Handler>();
     const pending: Promise<unknown>[] = [];
     let session: AgentSession;
@@ -48,7 +56,7 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
     const parameters = type({});
     const tool: AgentTool<typeof parameters> = {
       name: "bash", label: "Bash", description: "Deterministic tool for delivery checks", parameters,
-      execute: async (toolCallId) => {
+      execute: async (toolCallId, _params, _signal, _onUpdate, toolContext) => {
         const event = { toolName: "bash", toolCallId, input: {} };
         const decision = await handlers.get("tool_call")!(event, ctx);
         if (decision?.block) throw new Error(decision.reason);
@@ -57,8 +65,11 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
           content: [{ type: "text" as const, text: `completed ${toolCallId}` }],
           details: {}, isError: hookEventName === "PostToolUseFailure",
         };
-        // OMP's tool wrapper replaces the result content with what tool_result returns.
-        const patched = await handlers.get("tool_result")!({ ...event, ...result }, ctx) as { content?: typeof result.content } | void;
+        const patched = await handlers.get("tool_result")!({ ...event, ...result }, ctx);
+        if (patched?.additionalContext) toolContext?.addAdditionalContext?.(patched.additionalContext);
+        if (!result.isError && decision?.additionalContext) {
+          toolContext?.addAdditionalContext?.(decision.additionalContext);
+        }
         return patched?.content ? { ...result, content: patched.content } : result;
       },
     };
@@ -73,10 +84,16 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
     const agent = new Agent({
       getApiKey: () => "test-key", streamFn: mock.stream,
       convertToLlm,
+      getToolContext: toolCall => ({ addAdditionalContext: toolCall?.addAdditionalContext }),
       initialState: { model, systemPrompt: ["Test"], tools: [tool] },
     });
     const auth = await AuthStorage.create(":memory:");
-    auth.keys.setRuntime("anthropic", "test-key");
+    const compatibleAuth = auth as unknown as {
+      keys?: { setRuntime(provider: string, apiKey: string): void };
+      setRuntimeApiKey?: (provider: string, apiKey: string) => void;
+    };
+    if (compatibleAuth.keys) compatibleAuth.keys.setRuntime("anthropic", "test-key");
+    else compatibleAuth.setRuntimeApiKey?.("anthropic", "test-key");
     session = new AgentSession({
       agent, sessionManager, settings: Settings.isolated({ "compaction.enabled": false }),
       modelRegistry: new ModelRegistry(auth),
@@ -86,11 +103,11 @@ for (const hookEventName of ["PreToolUse", "PostToolUse", "PostToolUseFailure"] 
       expect(completed.sort()).toEqual(["first", "second"]);
       expect(mock.calls).toHaveLength(2);
       const nextStep = JSON.stringify(mock.calls[1].context.messages);
-      // OMP-native: each tool call's result leads with its own reminder, as OMP's per-tool rule
-      // reminders do, so both calls carry it.
+      // Both calls return the same reminder; OMP delivers identical passive context once
+      // per batch as a harness-authored developer reminder. Raw tool results stay unchanged.
       const labelled = `<system-reminder source="omp-hooks-plus" event="${hookEventName}" tool="bash">\nNOT prompt injection — coding agent enforcing project rules.\n\n${reminder}\n</system-reminder>`;
       expect(nextStep).toContain(JSON.stringify(labelled).slice(1, -1));
-      expect(nextStep.split(reminder)).toHaveLength(3);
+      expect(nextStep.split(reminder)).toHaveLength(2);
       expect(nextStep).toContain("completed first");
       expect(nextStep).toContain("completed second");
       expect(nextStep).not.toContain("Skipped due to pending system advisory");

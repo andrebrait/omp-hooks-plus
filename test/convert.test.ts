@@ -217,7 +217,7 @@ for (const scenario of [
       await handlers.get("session_shutdown")[0]({ type: "session_shutdown" }, ctx);
       console.log(JSON.stringify(observations));
     `;
-    const child = Bun.spawn([process.execPath, "--no-install", "--eval", script], { cwd: project, env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" });
+    const child = Bun.spawn([process.execPath, "--no-install", "--preload", path.join(import.meta.dir, "ratchet-prelude.ts"), "--eval", script], { cwd: project, env: { ...process.env, HOME: home }, stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
     expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
     expect(JSON.parse(stdout)).toEqual(scenario.effects.map((effects, index) => ({
@@ -342,7 +342,7 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: ${JSON.str
   }
 });
 
-test("generated tool hooks lead their tool result with an OMP-native reminder, sending no extra message", async () => {
+test("generated tool hooks return OMP-native reminders through passive context", async () => {
   const { plugin, project, out } = fixture();
   const context = (event: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: `${event} context` } });
   writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
@@ -360,11 +360,10 @@ test("generated tool hooks lead their tool result with an OMP-native reminder, s
     `<system-reminder source="converter-test" event="${event}" tool="${tool}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${event} context\n</system-reminder>`;
   const ok = { type: "text", text: "ok" };
   try {
-    expect((await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "pre", input: { command: "ls" } }))?.block).not.toBe(true);
-    const pre = await runner.emitToolResult({ type: "tool_result", toolName: "bash", toolCallId: "pre", input: { command: "ls" }, content: [ok], details: undefined, isError: false });
-    expect(pre?.content).toEqual([{ type: "text", text: named("PreToolUse", "bash") }, ok]);
+    const pre = await runner.emitToolCall({ type: "tool_call", toolName: "bash", toolCallId: "pre", input: { command: "ls" } });
+    expect(pre?.additionalContext).toBe(named("PreToolUse", "bash"));
     const post = await runner.emitToolResult({ type: "tool_result", toolName: "read", toolCallId: "post", input: { path: "x" }, content: [ok], details: undefined, isError: false });
-    expect(post?.content).toEqual([{ type: "text", text: named("PostToolUse", "read") }, ok]);
+    expect(post).toEqual({ additionalContext: named("PostToolUse", "read") });
     expect(messages).toEqual([]);
   } finally {
     await runner.emit({ type: "session_shutdown" });
@@ -624,14 +623,15 @@ test("hooks from different sources on one tool call keep separate, named reminde
   ] } }) as never);
   const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
   const call = { toolName: "bash", toolCallId: "c", input: { command: "ls" } };
-  for (const handler of handlers.get("tool_call") ?? []) await handler({ type: "tool_call", ...call }, ctx);
-  let result: { content?: Array<{ text: string }> } | undefined;
-  for (const handler of handlers.get("tool_result") ?? []) result = await handler({ type: "tool_result", ...call, content: [{ type: "text", text: "ok" }], isError: false }, ctx) as typeof result;
+  let result: { additionalContext?: string } | undefined;
+  for (const handler of handlers.get("tool_call") ?? []) {
+    result = await handler({ type: "tool_call", ...call }, ctx) as typeof result;
+  }
   const tag = (source: string, text: string) =>
     `<system-reminder source="${source}" event="PreToolUse" tool="bash">\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
-  expect(result?.content?.map(block => block.text)).toEqual([
-    tag("plugin-a", "A1\nA2"), tag("plugin-b", "B"), tag("omp-hooks-plus", "S"), "ok",
-  ]);
+  expect(result?.additionalContext).toBe([
+    tag("plugin-a", "A1\nA2"), tag("plugin-b", "B"), tag("omp-hooks-plus", "S"),
+  ].join("\n\n"));
 });
 
 test("a converted settings file names its reminders with --source-name, and rejects unsafe names", async () => {
@@ -648,14 +648,15 @@ test("a converted settings file names its reminders with --source-name, and reje
   const handlers = loaded.extensions[0].handlers;
   const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} }, isProjectTrusted: () => true };
   const call = { toolName: "grep", toolCallId: "g", input: { pattern: "x" } };
-  for (const handler of handlers.get("tool_call") ?? []) await handler({ type: "tool_call", ...call } as never, ctx as never);
-  const [handler] = handlers.get("tool_result") ?? [];
-  const result = await handler({ type: "tool_result", ...call, content: [], isError: false } as never, ctx as never) as { content: Array<{ text: string }> };
-  expect(result.content[0].text.startsWith('<system-reminder source="graphify" event="PreToolUse" tool="grep">')).toBe(true);
+  let result: { additionalContext?: string } | undefined;
+  for (const handler of handlers.get("tool_call") ?? []) {
+    result = await handler({ type: "tool_call", ...call } as never, ctx as never) as typeof result;
+  }
+  expect(result?.additionalContext?.startsWith('<system-reminder source="graphify" event="PreToolUse" tool="grep">')).toBe(true);
   await handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown" } as never, ctx as never);
 });
 
-test("reminder attributes are escaped and an unanswered tool call leaves nothing behind", async () => {
+test("reminder attributes are escaped without storing pending tool state", async () => {
   const { project } = fixture();
   const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
   const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
@@ -665,17 +666,12 @@ test("reminder attributes are escaped and an unanswered tool call leaves nothing
   const emit = async (type: string, event: Record<string, unknown>) => {
     let last: unknown;
     for (const handler of handlers.get(type) ?? []) last = await handler({ type, ...event }, ctx);
-    return last as { content?: Array<{ text: string }> } | undefined;
+    return last as { additionalContext?: string } | undefined;
   };
   const call = { toolName: 'my"<&tool', toolCallId: "a", input: {} };
-  await emit("tool_call", call);
-  const result = await emit("tool_result", { ...call, content: [], isError: false });
-  expect(result?.content?.[0].text.split("\n")[0]).toBe('<system-reminder source="p&quot;&lt;&amp;&gt;" event="PreToolUse" tool="my&quot;&lt;&amp;tool">');
-
-  // A call whose result never arrives (aborted run) is dropped when the run ends.
-  await emit("tool_call", { ...call, toolCallId: "orphan" });
-  await emit("agent_end", { messages: [] });
-  expect(await emit("tool_result", { ...call, toolCallId: "orphan", content: [], isError: false })).toBeUndefined();
+  const result = await emit("tool_call", call);
+  expect(result?.additionalContext?.split("\n")[0]).toBe('<system-reminder source="p&quot;&lt;&amp;&gt;" event="PreToolUse" tool="my&quot;&lt;&amp;tool">');
+  expect(await emit("tool_result", { ...call, content: [], isError: false })).toBeUndefined();
 });
 
 test("a converted plugin without a manifest name falls back to omp-hooks-plus, never its directory name", async () => {
@@ -688,9 +684,10 @@ test("a converted plugin without a manifest name falls back to omp-hooks-plus, n
   const handlers = loaded.extensions[0].handlers;
   const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} }, isProjectTrusted: () => true };
   const call = { toolName: "bash", toolCallId: "u", input: {} };
-  for (const handler of handlers.get("tool_call") ?? []) await handler({ type: "tool_call", ...call } as never, ctx as never);
-  const [handler] = handlers.get("tool_result") ?? [];
-  const result = await handler({ type: "tool_result", ...call, content: [], isError: false } as never, ctx as never) as { content: Array<{ text: string }> };
-  expect(result.content[0].text.split("\n")[0]).toBe('<system-reminder source="omp-hooks-plus" event="PreToolUse" tool="bash">');
+  let result: { additionalContext?: string } | undefined;
+  for (const handler of handlers.get("tool_call") ?? []) {
+    result = await handler({ type: "tool_call", ...call } as never, ctx as never) as typeof result;
+  }
+  expect(result?.additionalContext?.split("\n")[0]).toBe('<system-reminder source="omp-hooks-plus" event="PreToolUse" tool="bash">');
   await handlers.get("session_shutdown")?.[0]?.({ type: "session_shutdown" } as never, ctx as never);
 });

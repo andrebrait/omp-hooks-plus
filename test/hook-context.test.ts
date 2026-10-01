@@ -72,6 +72,40 @@ test("an async tool hook's late context still names its event and tool", async (
   expect(await delivered).toBe(reminder("PostToolUse", "late", "bash"));
 });
 
+test("tool_result selects exactly one success or failure hook family", async () => {
+  const handlers = new Map<string, (event: unknown, ctx: unknown) => Promise<unknown>>();
+  const pi = {
+    on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<unknown>) => handlers.set(name, handler),
+    sendMessage: () => {},
+  } as unknown as ExtensionAPI;
+  const output = (hookEventName: string, additionalContext: string) =>
+    JSON.stringify({ hookSpecificOutput: { hookEventName, additionalContext } });
+  const shared = createHookContext(pi, async () => ({ hooks: {
+    PostToolUse: [{ hooks: [{ type: "command", command: `printf '%s' '${output("PostToolUse", "success only")}'` }] }],
+    PostToolUseFailure: [{ hooks: [{ type: "command", command: `printf '%s' '${output("PostToolUseFailure", "failure only")}'` }] }],
+  } }));
+  contexts.push(shared);
+  registerToolHooks(pi, shared);
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "filter" }, ui: { notify: () => {} } };
+  const handler = handlers.get("tool_result")!;
+
+  const success = await handler(
+    { toolName: "bash", toolCallId: "success", input: {}, content: [], isError: false },
+    ctx,
+  );
+  expect(success).toEqual({
+    additionalContext: reminder("PostToolUse", "success only", "bash"),
+  });
+
+  const failure = await handler(
+    { toolName: "bash", toolCallId: "failure", input: {}, content: [], isError: true },
+    ctx,
+  );
+  expect(failure).toEqual({
+    additionalContext: reminder("PostToolUseFailure", "failure only", "bash"),
+  });
+});
+
 test("identical reminders are delivered once per turn, preserving distinct content", () => {
   const messages: string[] = [];
   const shared = context(messages);

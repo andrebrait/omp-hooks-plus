@@ -236,11 +236,6 @@ function replacementContent(value: unknown) {
 }
 
 export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
-  // Synchronous tool-hook context leads that call's own result, the way OMP's per-tool
-  // rule reminders do: every qualifying call carries its reminder, next to its output.
-  const pendingPre = new Map<string, { reminders: string[]; isActive: () => boolean }>();
-  // Every tool result arrives before its run ends; a call without one (aborted) is dropped here.
-  pi.on("agent_end", () => pendingPre.clear());
 
   pi.on("tool_call", async (event, ctx) => {
     const delivery = shared.captureContext();
@@ -294,19 +289,17 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       }
     }
 
-    if (result.contexts) {
-      pendingPre.set(event.toolCallId, {
-        reminders: result.contexts.map(({ source, text }) =>
-          hookReminder(text, { hookEventName: "PreToolUse", toolName: event.toolName, source })),
-        isActive: delivery.isActive,
-      });
-    }
+    if (!result.contexts || result.contexts.length === 0) return;
+    return {
+      additionalContext: result.contexts
+        .map(({ source, text }) =>
+          hookReminder(text, { hookEventName: "PreToolUse", toolName: event.toolName, source }))
+        .join("\n\n"),
+    };
   });
 
   pi.on("tool_result", async (event, ctx) => {
     const delivery = shared.captureContext();
-    const pre = pendingPre.get(event.toolCallId);
-    pendingPre.delete(event.toolCallId);
     const hookEventName = event.isError ? "PostToolUseFailure" : "PostToolUse";
     const context: HookExecutionContext = {
       sessionId: shared.getSessionId(ctx),
@@ -331,22 +324,22 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
       ctx.abort?.();
     }
 
-    const reminders = [
-      ...(pre?.isActive() ? pre.reminders : []),
-      ...(delivery.isActive()
-        ? (result.contexts ?? []).map(({ source, text }) =>
-            hookReminder(text, { hookEventName, toolName: event.toolName, source }))
-        : []),
-    ];
+    const reminders = delivery.isActive()
+      ? (result.contexts ?? []).map(({ source, text }) =>
+          hookReminder(text, { hookEventName, toolName: event.toolName, source }))
+      : [];
+    const additionalContext = reminders.length > 0 ? reminders.join("\n\n") : undefined;
     const patched = result.content !== undefined || result.details !== undefined || result.isError !== undefined;
-    if (!patched && reminders.length === 0) return;
+    if (!patched && additionalContext === undefined) return;
     return {
-      content: [
-        ...reminders.map((text) => ({ type: "text" as const, text })),
-        ...(result.content === undefined ? event.content : replacementContent(result.content)),
-      ],
-      details: result.details ?? event.details,
-      isError: result.isError ?? event.isError,
+      ...(patched
+        ? {
+            content: result.content === undefined ? event.content : replacementContent(result.content),
+            details: result.details ?? event.details,
+            isError: result.isError ?? event.isError,
+          }
+        : {}),
+      ...(additionalContext !== undefined ? { additionalContext } : {}),
     };
   });
 }
