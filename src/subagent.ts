@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { isRecord } from "./type-guards";
 
 /** The subagent a session runs, in the terms of Claude Code's hook payloads. */
 export type SubagentIdentity = {
@@ -51,8 +52,8 @@ function headerId(file: string): string | undefined {
     fd = openSync(file, "r");
     const buffer = Buffer.allocUnsafe(HEADER_BYTES);
     const [line] = buffer.toString("utf8", 0, readSync(fd, buffer, 0, HEADER_BYTES, 0)).split("\n", 1);
-    const header = JSON.parse(line) as { type?: unknown; id?: unknown } | null;
-    return header?.type === "session" && typeof header.id === "string" && header.id !== "" ? header.id : undefined;
+    const header: unknown = JSON.parse(line);
+    return isRecord(header) && header.type === "session" && typeof header.id === "string" && header.id !== "" ? header.id : undefined;
   } catch {
     return undefined;
   } finally {
