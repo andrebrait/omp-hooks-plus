@@ -60,7 +60,8 @@ function ctxFor(cwd: string, file: string | undefined, sessionId: string, agent?
 const mainCtx = (cwd: string, file: string | undefined) => ctxFor(cwd, file, PARENT_ID, main);
 const subCtx = (cwd: string, file: string | undefined, agent?: object) => ctxFor(cwd, file, CHILD_ID, agent);
 
-const record = (log: string): HookGroup["hooks"][number] => ({ type: "command", command: `{ cat; echo; } >> "${log}"` });
+// One write per record: detached hooks run in parallel, and a `cat; echo` pair can interleave with a sibling's.
+const record = (log: string): HookGroup["hooks"][number] => ({ type: "command", command: `printf '%s\\n' "$(cat)" >> "${log}"` });
 const records = (log: string): Array<Record<string, unknown>> =>
   existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
 // Notification hooks run detached from the host event, so wait (bounded) for their records.
