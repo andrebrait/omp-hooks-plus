@@ -124,11 +124,13 @@ export function createHookContext(
       if (!agent) {
         return { sessionId: shared.getSessionId(ctx), transcriptPath: ctx.sessionManager.getSessionFile() };
       }
-      // Without a known parent (an in-memory subagent, or an id its file does not record)
-      // the subagent's own session id stands in.
+      // Without a resolvable parent (an in-memory subagent, or a parent file that records no id)
+      // the subagent's own session id and transcript stand in together, never one from each session.
+      const parentId = agent.parentFile && sessionIdOfFile(agent.parentFile);
       return {
-        sessionId: (agent.parentFile && sessionIdOfFile(agent.parentFile)) || shared.getSessionId(ctx),
-        transcriptPath: agent.parentFile ?? agent.file,
+        ...(parentId
+          ? { sessionId: parentId, transcriptPath: agent.parentFile }
+          : { sessionId: shared.getSessionId(ctx), transcriptPath: agent.file }),
         agentId: agent.agentId,
         agentType: agent.agentType,
       };
@@ -189,12 +191,14 @@ export function createHookContext(
       return toolResponse;
     },
     triggerSessionStartHook: async (matcher, ctx) => {
-      // Claude Code never fires SessionStart for a subagent; SubagentStart briefs it instead.
-      if (subagentIdentity(ctx)) return;
+      // Claude Code never fires SessionStart for a subagent at startup or resume; SubagentStart
+      // briefs it instead. Compaction is different: the subagent's context is rebuilt, so it
+      // gets the bootstrap context again, keyed on the parent's session.
+      if (matcher !== "compact" && subagentIdentity(ctx)) return;
       const delivery = shared.captureContext();
       const settings = await shared.settingsFor(ctx);
       if (!delivery.isActive()) return;
-      const sessionId = shared.getSessionId(ctx);
+      const { sessionId, agentId, agentType } = shared.identityFor(ctx);
       if (matcher === "compact") {
         // Compaction legitimately recurs within a session — unlike startup/resume,
         // it must reinject its bootstrap context every time, not just once. Reset
@@ -215,6 +219,8 @@ export function createHookContext(
         matcher,
         {
           sessionId,
+          agentId,
+          agentType,
           cwd: ctx.cwd,
           hookEventName: "SessionStart",
           source: matcher,

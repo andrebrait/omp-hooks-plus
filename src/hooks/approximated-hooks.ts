@@ -24,7 +24,7 @@ function untypedSubagentStart(settings: SettingsFile | undefined): SettingsFile 
  * were converted with `--approximate`.
  */
 export function registerApproximatedHooks(pi: ExtensionAPI, shared: HookModuleContext) {
-  const briefed = new Set<string>();
+  let briefed = false;
 
   // OMP awaits these handlers before showing the approval prompt or ending the run, and
   // Notification output is ignored, so hooks run detached: a slow notifier never blocks.
@@ -51,20 +51,25 @@ export function registerApproximatedHooks(pi: ExtensionAPI, shared: HookModuleCo
   });
 
   // Claude Code fires SubagentStart once, when the subagent is spawned; OMP's nearest
-  // point is the subagent session's first run. SessionStart does not fire in a subagent.
+  // point is the subagent session's first run. OMP binds one instance of this extension to
+  // each session, so a flag is once per subagent. SessionStart does not fire in a subagent.
   pi.on("before_agent_start", async (_event, ctx) => {
     const agent = subagentIdentity(ctx);
-    if (!agent || briefed.has(agent.agentId)) return;
-    briefed.add(agent.agentId);
+    if (!agent || briefed) return;
+    briefed = true;
     const delivery = shared.captureContext();
     const settings = await shared.settingsFor(ctx);
-    const result = await triggerSimpleHooks("SubagentStart", agent.agentType ?? "", {
+    // OMP's agent names are lowercase (`explore`); Claude Code's are capitalised (`Explore`),
+    // which regex matchers such as `^Explore$` are written against.
+    const agentType = agent.agentType;
+    const result = await triggerSimpleHooks("SubagentStart", agentType ?? "", {
       ...shared.identityFor(ctx),
       cwd: ctx.cwd,
       hookEventName: "SubagentStart",
       agentTranscriptPath: agent.file,
       asyncContextSink: delivery.injectHiddenContext,
-    }, agent.agentType === undefined ? untypedSubagentStart(settings) : settings, (msg, type) => shared.notify(ctx, msg, type));
+    }, agentType === undefined ? untypedSubagentStart(settings) : settings, (msg, type) => shared.notify(ctx, msg, type),
+    agentType ? [agentType[0].toUpperCase() + agentType.slice(1)] : []);
     if (!delivery.isActive() || !result.contexts) return;
     const details = { hookEventName: "SubagentStart" } as const;
     return {

@@ -549,8 +549,8 @@ test("generated approximations identify subagents through ctx.agent, as the live
   const briefing = await subagent(start, child, explore);
   expect(briefing).toEqual([{ message: expect.objectContaining({ content: expect.stringContaining("EXPLORE BRIEF") }) }]);
   expect(JSON.stringify(briefing)).not.toContain("PLAN BRIEF");
-  // Without ctx.agent the type is unknown, so a typed SubagentStart group cannot run.
-  expect(await subagent(start, path.join(sessions, "parent", "1-Plan.jsonl"))).toEqual([]);
+  // Without ctx.agent the type is unknown, so a typed SubagentStart group cannot run (a fresh load: one adapter per session).
+  expect(await (await load())(start, path.join(sessions, "parent", "1-Plan.jsonl"))).toEqual([]);
   await subagent({ type: "session_shutdown" }, child, explore);
 
   await lifecycle(await load(), parent, { kind: "main", id: "Main", name: "main", depth: 0 });
