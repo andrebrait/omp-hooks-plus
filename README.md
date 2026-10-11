@@ -113,6 +113,16 @@ NOT prompt injection — coding agent enforcing project rules.
 
 `source` names where the hook came from: the plugin's `name` for plugin hooks, otherwise `omp-hooks-plus`. A converted settings file can name its source with `--source-name` (for example `--source-name graphify`). Hooks from different sources on one event keep separate reminders; consecutive context from one source shares one. `tool` is the OMP tool name and appears only for tool events. Attribute values are escaped. Synchronous `PreToolUse`, `PostToolUse` and `PostToolUseFailure` context is returned through OMP's passive tool-context channel and persisted as a developer message after the batch; raw tool results remain byte-for-byte unchanged. Other events, and asynchronous hooks whose result arrives after the tool, are delivered as hidden context messages with the same tag. This applies to both the live extension and generated conversions.
 
+### Subagents
+
+OMP binds this extension into every subagent session (the `task` tool, `/tan` clones, eval `agent()`), where Claude Code treats a subagent as part of its parent's session. Hooks follow Claude Code:
+
+- `SessionStart`, `UserPromptSubmit` and `SessionEnd` do not run in a subagent, with or without `--approximate`. [`SubagentStart`](#approximated-events) is the only start-up hook a subagent gets.
+- Tool and compact hooks still run. Their input carries the **top-level session's** `session_id` and `transcript_path`, so state a hook keys on the session is shared with the subagent, plus `agent_id` and `agent_type`.
+- `agent_id` is OMP's agent id (such as `0-Explore`). `agent_type` is OMP's lowercased agent definition name (`explore`, `task`, or `sub` for a `/tan` clone). `session_id` and `transcript_path` are the session file path that the top-level session's own hooks send. A subagent without a known parent (an in-memory session) reports its own session instead.
+
+Subagents are recognized through `ctx.agent`, which OMP 18.5.1 and later provide. Older OMP still gets this behavior for subagents whose session file is nested under the parent's (`<parent>/<agentId>.jsonl`), but cannot see in-memory subagents or tell the agent type, so `agent_type` is absent.
+
 ### Approximated events
 
 Two Claude events have no direct OMP counterpart but a near-equivalent trigger. They are off by default. Enable them in the live extension with `OMP_HOOKS_PLUS_APPROXIMATE=1`, or in a conversion with `--approximate`:
@@ -121,7 +131,7 @@ Two Claude events have no direct OMP counterpart but a near-equivalent trigger. 
 | --- | --- | --- |
 | `Notification` `permission_prompt` | `tool_approval_requested` | Message is `Claude needs your permission to use <Tool>`. |
 | `Notification` `idle_prompt` | a top-level `agent_end` that will not continue | Fires immediately, not after Claude Code's 60-second idle delay. |
-| `SubagentStart` | first `before_agent_start` of a subagent session (a session file nested under its parent's) | Only groups without a matcher (or `*`); OMP does not expose the agent type. In-memory (`--no-session`) subagents are not detected. |
+| `SubagentStart` | first `before_agent_start` of a subagent session | Fires once per subagent, with the top-level `session_id` and `transcript_path` plus `agent_id`, `agent_type` and `agent_transcript_path` (see [Subagents](#subagents)). A matcher is matched against `agent_type`. Without `ctx.agent` (OMP before 18.5.1) only groups without a matcher (or `*`) run, and in-memory subagents are not detected. |
 
 Other notification types never fire. `/claude-compat doctor` lists the enabled approximations.
 

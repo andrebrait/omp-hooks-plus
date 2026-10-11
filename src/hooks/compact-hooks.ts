@@ -24,12 +24,11 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
     const result = await triggerCompactHooks(
       "PreCompact",
       {
-        sessionId: shared.getSessionId(ctx),
+        ...shared.identityFor(ctx),
         cwd: ctx.cwd,
         hookEventName: "PreCompact",
         trigger,
         customInstructions: event.customInstructions ?? "",
-        transcriptPath: ctx.sessionManager.getSessionFile(),
         asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),
@@ -49,12 +48,11 @@ export function registerCompactHooks(pi: ExtensionAPI, shared: HookModuleContext
     const result = await triggerCompactHooks(
       "PostCompact",
       {
-        sessionId: shared.getSessionId(ctx),
+        ...shared.identityFor(ctx),
         cwd: ctx.cwd,
         hookEventName: "PostCompact",
         trigger,
         compactSummary: event.compactionEntry.summary,
-        transcriptPath: ctx.sessionManager.getSessionFile(),
         asyncContextSink: delivery.injectHiddenContext,
       },
       await shared.settingsFor(ctx),

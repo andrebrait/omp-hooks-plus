@@ -414,7 +414,7 @@ test("skipping unsupported declarations never emits a command that embeds the or
   expect(existsSync(path.join(out, "index.ts"))).toBe(false);
 });
 
-test("approximations cover Notification and unmatched SubagentStart; other events stay unsupported", async () => {
+test("approximations cover Notification and SubagentStart, matchers included; other events stay unsupported", async () => {
   const { plugin, root } = fixture();
   mixedEvents(plugin);
   const approximate = await convertHooks(plugin, { dryRun: true, approximate: true });
@@ -428,12 +428,13 @@ test("approximations cover Notification and unmatched SubagentStart; other event
   expect(approximate.report.diagnostics.some(item => item.level === "info" && item.pointer === "/hooks/Notification"
     && item.message.includes("tool_approval_requested"))).toBe(true);
 
-  // OMP does not expose a subagent's agent type, so a typed SubagentStart matcher cannot be approximated.
+  // A SubagentStart matcher is matched against the agent type at run time.
   const typed = path.join(root, "typed");
   cpSync(plugin, typed, { recursive: true });
   mixedEvents(typed, "Explore");
   const typedResult = await convertHooks(typed, { dryRun: true, approximate: true, skipUnsupported: true });
-  expect(typedResult.report.hooks.find(hook => hook.event === "SubagentStart")?.status).toBe("unsupported");
+  expect(typedResult.report.hooks.find(hook => hook.event === "SubagentStart")?.status).toBe("approximated");
+  expect(typedResult.report.diagnostics.some(item => item.level === "unsupported" && item.pointer.includes("SubagentStart"))).toBe(false);
 });
 
 test("generated approximations notify on approval requests and idle stops, and brief subagents only", async () => {
@@ -489,6 +490,69 @@ test("generated approximations notify on approval requests and idle stops, and b
   } finally {
     await emit({ type: "session_shutdown" });
   }
+}, 30_000);
+
+test("generated approximations identify subagents through ctx.agent, as the live adapter does", async () => {
+  const { plugin, project, out } = fixture();
+  const record = (name: string) => ({ type: "command", command: `{ cat; echo; } >> "$CLAUDE_PROJECT_DIR/${name}.json"` });
+  const brief = (matcher: string, text: string) => ({ matcher, hooks: [{ type: "command", command: `printf '%s' '${JSON.stringify({ hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: text } })}'` }] });
+  writeFileSync(path.join(plugin, "hooks/hooks.json"), JSON.stringify({ hooks: {
+    SessionStart: [{ hooks: [record("lifecycle")] }],
+    UserPromptSubmit: [{ hooks: [record("lifecycle")] }],
+    SessionEnd: [{ hooks: [record("lifecycle")] }],
+    PreToolUse: [{ hooks: [record("tool")] }],
+    SubagentStart: [brief("explore", "EXPLORE BRIEF"), brief("plan", "PLAN BRIEF")],
+  } }));
+  const result = await convertHooks(plugin, { out, approximate: true });
+  expect(result.exitCode).toBe(0);
+  type Agent = { kind: string; id: string; name: string; depth: number };
+  type Emit = (event: { type: string; [key: string]: unknown }, sessionFile: string, agent?: Agent) => Promise<unknown[]>;
+  // Each load runs the extension factory again: one adapter per session, as OMP binds it.
+  const load = async (): Promise<Emit> => {
+    const loaded = await loadExtensions([path.join(out, "index.ts")], project);
+    expect(loaded.errors).toEqual([]);
+    const handlers = loaded.extensions[0].handlers;
+    return async (event, sessionFile, agent) => {
+      const ctx = { cwd: project, sessionManager: { getSessionFile: () => sessionFile }, ui: { notify: () => {} }, isProjectTrusted: () => true, hasUI: false, ...(agent ? { agent } : {}) };
+      const results = [];
+      for (const handler of handlers.get(event.type) ?? []) results.push(await handler(event as never, ctx as never));
+      return results.filter(Boolean);
+    };
+  };
+  const records = (name: string) => {
+    const file = path.join(project, "..", `${name}.json`);
+    return existsSync(file) ? readFileSync(file, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line)) : [];
+  };
+  const sessions = path.join(project, "..", "sessions");
+  mkdirSync(path.join(sessions, "parent"), { recursive: true });
+  const parent = path.join(sessions, "parent.jsonl");
+  const child = path.join(sessions, "parent", "0-Explore.jsonl");
+  writeFileSync(parent, "");
+  const explore: Agent = { kind: "sub", id: "0-Explore", name: "explore", depth: 1 };
+  const lifecycle = async (emit: Emit, file: string, agent: Agent) => {
+    await emit({ type: "session_start" }, file, agent);
+    await emit({ type: "input", text: "hello", source: "interactive" }, file, agent);
+    await emit({ type: "session_shutdown" }, file, agent);
+  };
+  const start = { type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] };
+
+  // A /tan clone is a subagent at depth 0; with ctx.agent the file layout does not matter.
+  await lifecycle(await load(), child, { kind: "sub", id: "Tan-1", name: "sub", depth: 0 });
+  await lifecycle(await load(), child, explore);
+  expect(records("lifecycle")).toEqual([]);
+
+  const subagent = await load();
+  await subagent({ type: "tool_call", toolName: "bash", toolCallId: "t1", input: { command: "ls" } }, child, explore);
+  expect(records("tool")).toEqual([expect.objectContaining({ session_id: parent, transcript_path: parent, agent_id: "0-Explore", agent_type: "explore" })]);
+  const briefing = await subagent(start, child, explore);
+  expect(briefing).toEqual([{ message: expect.objectContaining({ content: expect.stringContaining("EXPLORE BRIEF") }) }]);
+  expect(JSON.stringify(briefing)).not.toContain("PLAN BRIEF");
+  // Without ctx.agent the type is unknown, so a typed SubagentStart group cannot run.
+  expect(await subagent(start, path.join(sessions, "parent", "1-Plan.jsonl"))).toEqual([]);
+  await subagent({ type: "session_shutdown" }, child, explore);
+
+  await lifecycle(await load(), parent, { kind: "main", id: "Main", name: "main", depth: 0 });
+  expect(records("lifecycle").map(entry => entry.hook_event_name)).toEqual(["SessionStart", "UserPromptSubmit", "SessionEnd"]);
 }, 30_000);
 
 test("the on-the-fly adapter never runs approximated events", async () => {

@@ -242,10 +242,9 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
     const result = await triggerPreToolUseHooks(
       event.toolName,
       {
-        sessionId: shared.getSessionId(ctx),
+        ...shared.identityFor(ctx),
         cwd: ctx.cwd,
         hookEventName: "PreToolUse",
-        transcriptPath: ctx.sessionManager.getSessionFile(),
         toolName: event.toolName,
         toolInput: event.input as Record<string, unknown>,
         toolUseId: event.toolCallId,
@@ -302,10 +301,9 @@ export function registerToolHooks(pi: ExtensionAPI, shared: HookModuleContext) {
     const delivery = shared.captureContext();
     const hookEventName = event.isError ? "PostToolUseFailure" : "PostToolUse";
     const context: HookExecutionContext = {
-      sessionId: shared.getSessionId(ctx),
+      ...shared.identityFor(ctx),
       cwd: ctx.cwd,
       hookEventName,
-      transcriptPath: ctx.sessionManager.getSessionFile(),
       toolName: event.toolName,
       toolInput: event.input as Record<string, unknown>,
       toolUseId: event.toolCallId,

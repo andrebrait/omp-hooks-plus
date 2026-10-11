@@ -2,7 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import { DEFAULT_SOURCE } from "./hooks/shared";
-import type { HookContextDetails, HookContextEntry, HookMatcherValue, SettingsFile } from "./types";
+import { subagentIdentity } from "./subagent";
+import type { HookContextDetails, HookContextEntry, HookExecutionContext, HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
 
@@ -37,6 +38,11 @@ export type HookModuleContext = {
     injectHiddenContext: HookModuleContext["injectHiddenContext"];
   };
   getSessionId: (ctx: ExtensionContext) => string;
+  /**
+   * Common hook fields for events that also run in subagents. A subagent reports the
+   * top-level session, as Claude Code does, plus its own agent_id and agent_type.
+   */
+  identityFor: (ctx: ExtensionContext) => Pick<HookExecutionContext, "sessionId" | "transcriptPath" | "agentId" | "agentType">;
   notify: (ctx: ExtensionContext, msg: string, type: NotifyType) => void;
   injectHiddenContext: (
     content: string,
@@ -112,6 +118,19 @@ export function createHookContext(
     },
     getSessionId: (ctx: ExtensionContext) =>
       ctx.sessionManager.getSessionFile() ?? "ephemeral",
+    identityFor: (ctx: ExtensionContext) => {
+      const agent = subagentIdentity(ctx);
+      if (!agent) {
+        return { sessionId: shared.getSessionId(ctx), transcriptPath: ctx.sessionManager.getSessionFile() };
+      }
+      // With no known parent (an in-memory subagent) the subagent's own session stands in.
+      return {
+        sessionId: agent.parentFile ?? shared.getSessionId(ctx),
+        transcriptPath: agent.parentFile ?? agent.file,
+        agentId: agent.agentId,
+        agentType: agent.agentType,
+      };
+    },
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
     injectHiddenContext: (raw, details, triggerTurn = false, delivery = "nextTurn") => {
@@ -168,6 +187,8 @@ export function createHookContext(
       return toolResponse;
     },
     triggerSessionStartHook: async (matcher, ctx) => {
+      // Claude Code never fires SessionStart for a subagent; SubagentStart briefs it instead.
+      if (subagentIdentity(ctx)) return;
       const delivery = shared.captureContext();
       const settings = await shared.settingsFor(ctx);
       if (!delivery.isActive()) return;

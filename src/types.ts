@@ -120,8 +120,12 @@ export interface HookExecutionContext {
   // Notification fields (approximated)
   notificationType?: string;
   message?: string;
-  // SubagentStart fields (approximated)
+  // Set by hooks that run inside a subagent, whose sessionId/transcriptPath above
+  // then name the top-level session, as Claude Code reports them.
   agentId?: string;
+  agentType?: string;
+  // SubagentStart field (approximated)
+  agentTranscriptPath?: string;
   // Async command hooks can deliver additionalContext after the foreground event.
   asyncContextSink?: (
     content: string,

@@ -280,11 +280,6 @@ export async function loadConversionSource(
           return;
         }
         let groupStatus = combine(eventStatus, fields(group, groupFields, groupLocation));
-        if (eventStatus === "approximated" && event === "SubagentStart" && typeof group.matcher === "string"
-            && group.matcher.trim() !== "" && group.matcher.trim() !== "*") {
-          groupStatus = combine(groupStatus, "unsupported");
-          diagnostic("unsupported", child(groupLocation, "matcher"), "OMP does not expose a subagent's agent type; a SubagentStart matcher cannot be approximated.");
-        }
         if ("matcher" in group && typeof group.matcher !== "string") {
           groupStatus = "invalid";
           diagnostic("error", child(groupLocation, "matcher"), "Hook matcher must be a string.");
