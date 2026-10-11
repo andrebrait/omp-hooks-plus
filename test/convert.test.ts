@@ -201,7 +201,7 @@ for (const scenario of [
       const handlers = loaded.extensions[0].handlers;
       let trusted = false;
       const ctx = {
-        cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined },
+        cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" },
         ui: { notify: () => {} }, isProjectTrusted: () => trusted,
       };
       const observations = [];
@@ -447,7 +447,7 @@ test("generated approximations notify on approval requests and idle stops, and b
   expect(loaded.errors).toEqual([]);
   const handlers = loaded.extensions[0].handlers;
   const emit = async (event: { type: string; [key: string]: unknown }, sessionFile?: string) => {
-    const ctx = { cwd: project, sessionManager: { getSessionFile: () => sessionFile }, ui: { notify: () => {} }, isProjectTrusted: () => true, hasUI: false };
+    const ctx = { cwd: project, sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "session" }, ui: { notify: () => {} }, isProjectTrusted: () => true, hasUI: false };
     const results = [];
     for (const handler of handlers.get(event.type) ?? []) results.push(await handler(event as never, ctx as never));
     return results.filter(Boolean);
@@ -513,7 +513,7 @@ test("generated approximations identify subagents through ctx.agent, as the live
     expect(loaded.errors).toEqual([]);
     const handlers = loaded.extensions[0].handlers;
     return async (event, sessionFile, agent) => {
-      const ctx = { cwd: project, sessionManager: { getSessionFile: () => sessionFile }, ui: { notify: () => {} }, isProjectTrusted: () => true, hasUI: false, ...(agent ? { agent } : {}) };
+      const ctx = { cwd: project, sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => "own-session" }, ui: { notify: () => {} }, isProjectTrusted: () => true, hasUI: false, ...(agent ? { agent } : {}) };
       const results = [];
       for (const handler of handlers.get(event.type) ?? []) results.push(await handler(event as never, ctx as never));
       return results.filter(Boolean);
@@ -527,7 +527,8 @@ test("generated approximations identify subagents through ctx.agent, as the live
   mkdirSync(path.join(sessions, "parent"), { recursive: true });
   const parent = path.join(sessions, "parent.jsonl");
   const child = path.join(sessions, "parent", "0-Explore.jsonl");
-  writeFileSync(parent, "");
+  const parentId = "01938a52-7b6e-7c1d-9a3f-5e2d8c4b1a07";
+  writeFileSync(parent, `${JSON.stringify({ type: "session", id: parentId, cwd: project })}\n`);
   const explore: Agent = { kind: "sub", id: "0-Explore", name: "explore", depth: 1 };
   const lifecycle = async (emit: Emit, file: string, agent: Agent) => {
     await emit({ type: "session_start" }, file, agent);
@@ -543,7 +544,8 @@ test("generated approximations identify subagents through ctx.agent, as the live
 
   const subagent = await load();
   await subagent({ type: "tool_call", toolName: "bash", toolCallId: "t1", input: { command: "ls" } }, child, explore);
-  expect(records("tool")).toEqual([expect.objectContaining({ session_id: parent, transcript_path: parent, agent_id: "0-Explore", agent_type: "explore" })]);
+  // The parent's session id (its header id, a UUID), not the subagent's own id and not a path.
+  expect(records("tool")).toEqual([expect.objectContaining({ session_id: parentId, transcript_path: parent, agent_id: "0-Explore", agent_type: "explore" })]);
   const briefing = await subagent(start, child, explore);
   expect(briefing).toEqual([{ message: expect.objectContaining({ content: expect.stringContaining("EXPLORE BRIEF") }) }]);
   expect(JSON.stringify(briefing)).not.toContain("PLAN BRIEF");
@@ -563,7 +565,7 @@ test("the on-the-fly adapter never runs approximated events", async () => {
   const settings = { hooks: JSON.parse(readFileSync(path.join(plugin, "hooks/hooks.json"), "utf8")).hooks };
   registerHooks(pi as never, async () => settings as never);
   expect(handlers.has("tool_approval_requested")).toBe(false);
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} } };
   for (const handler of handlers.get("agent_end") ?? []) await handler({ type: "agent_end", messages: [] }, ctx);
   expect(existsSync(path.join(project, "..", "idle.json"))).toBe(false);
 });
@@ -617,7 +619,7 @@ test("a slow Notification hook never delays the approval prompt or the next turn
   const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
   const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
   registerHooks(pi as never, async () => ({ hooks: { Notification: [{ hooks: [{ type: "command", command }] }] } }), { approximations: true });
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} } };
   const emit = (event: { type: string; [key: string]: unknown }) => Promise.all((handlers.get(event.type) ?? []).map(handler => handler(event, ctx)));
   await emit({ type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "read", approvalMode: "ask" });
   await emit({ type: "agent_end", messages: [] });
@@ -639,7 +641,7 @@ test("a blocking Stop hook's continuation is not reported as an idle prompt", as
     Stop: [{ hooks: [{ type: "command", command: `printf '%s' '{"decision":"block","reason":"Run the tests."}'` }] }],
     Notification: [{ hooks: [record] }],
   } }), { approximations: true });
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} } };
   // OMP runs agent_end handlers in registration order, awaiting each.
   const emit = async (event: { type: string; [key: string]: unknown }) => { for (const handler of handlers.get(event.type) ?? []) await handler(event, ctx); };
   await emit({ type: "agent_end", messages: [] });
@@ -685,7 +687,7 @@ test("hooks from different sources on one tool call keep separate, named reminde
     { hooks: [{ ...say("A1"), source: "plugin-a" }, { ...say("A2"), source: "plugin-a" }] },
     { hooks: [{ ...say("B"), source: "plugin-b" }, say("S")] },
   ] } }) as never);
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} } };
   const call = { toolName: "bash", toolCallId: "c", input: { command: "ls" } };
   let result: { additionalContext?: string } | undefined;
   for (const handler of handlers.get("tool_call") ?? []) {
@@ -710,7 +712,7 @@ test("a converted settings file names its reminders with --source-name, and reje
   const loaded = await loadExtensions([path.join(out, "index.ts")], project);
   expect(loaded.errors).toEqual([]);
   const handlers = loaded.extensions[0].handlers;
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} }, isProjectTrusted: () => true };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} }, isProjectTrusted: () => true };
   const call = { toolName: "grep", toolCallId: "g", input: { pattern: "x" } };
   let result: { additionalContext?: string } | undefined;
   for (const handler of handlers.get("tool_call") ?? []) {
@@ -726,7 +728,7 @@ test("reminder attributes are escaped without storing pending tool state", async
   const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
   const say = { type: "command", command: `printf '%s' '{"additionalContext":"ctx"}'`, source: 'p"<&>' };
   registerHooks(pi as never, async () => ({ hooks: { PreToolUse: [{ hooks: [say] }] } }) as never);
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} } };
   const emit = async (type: string, event: Record<string, unknown>) => {
     let last: unknown;
     for (const handler of handlers.get(type) ?? []) last = await handler({ type, ...event }, ctx);
@@ -746,7 +748,7 @@ test("a converted plugin without a manifest name falls back to omp-hooks-plus, n
   expect((await convertHooks(plugin, { out })).exitCode).toBe(0);
   const loaded = await loadExtensions([path.join(out, "index.ts")], project);
   const handlers = loaded.extensions[0].handlers;
-  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} }, isProjectTrusted: () => true };
+  const ctx = { cwd: project, sessionManager: { getSessionFile: () => undefined, getSessionId: () => "session" }, ui: { notify: () => {} }, isProjectTrusted: () => true };
   const call = { toolName: "bash", toolCallId: "u", input: {} };
   let result: { additionalContext?: string } | undefined;
   for (const handler of handlers.get("tool_call") ?? []) {

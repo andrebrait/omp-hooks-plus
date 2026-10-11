@@ -93,6 +93,8 @@ Supported event mappings include:
 
 Matching handlers are deduplicated by command, arguments, and environment and normally run in parallel. Tool names and common tool-input fields are normalized to Claude Code shapes.
 
+`session_id` is OMP's session id, the UUID in the session header, as in Claude Code; `transcript_path` is the session file. A hook that keys per-session state on `session_id` (such as Caveman's per-session mode, which only accepts ids made of letters, digits, `_` and `-`) therefore works per session. A session with no id reports `ephemeral`. **Breaking fix:** earlier releases sent the session file path as `session_id`, so any hook state keyed on that old value is re-keyed and starts fresh.
+
 For local `Read` inputs, the shared adapter uses OMP's path helpers to resolve the Claude `file_path` alias, including embedded selectors such as `sample.ts:1-2`. Existing literal colon-containing filenames take precedence. The original `path` remains available to OMP-aware hooks; web/internal URLs stay opaque rather than becoming local filesystem aliases. `Edit` and `Write` paths are not interpreted as read selectors.
 
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts terminate the complete process group on macOS and Linux. Repeated blocking from a `Stop` hook is suppressed after one follow-up turn.
@@ -119,7 +121,7 @@ OMP binds this extension into every subagent session (the `task` tool, `/tan` cl
 
 - `SessionStart`, `UserPromptSubmit` and `SessionEnd` do not run in a subagent, with or without `--approximate`. [`SubagentStart`](#approximated-events) is the only start-up hook a subagent gets.
 - Tool and compact hooks still run. Their input carries the **top-level session's** `session_id` and `transcript_path`, so state a hook keys on the session is shared with the subagent, plus `agent_id` and `agent_type`.
-- `agent_id` is OMP's agent id (such as `0-Explore`). `agent_type` is OMP's lowercased agent definition name (`explore`, `task`, or `sub` for a `/tan` clone). `session_id` and `transcript_path` are the session file path that the top-level session's own hooks send. A subagent without a known parent (an in-memory session) reports its own session instead.
+- `agent_id` is OMP's agent id (such as `0-Explore`). `agent_type` is OMP's lowercased agent definition name (`explore`, `task`, or `sub` for a `/tan` clone). `session_id` is the top-level session's id, taken from the header (first line) of the top-level session file, else from the id in the file name (`<timestamp>_<id>.jsonl`), else the subagent's own id; `transcript_path` is that file. A subagent without a known parent (an in-memory session) reports its own session id and no `transcript_path`.
 
 Subagents are recognized through `ctx.agent`, which OMP 18.5.1 and later provide. Older OMP still gets this behavior for subagents whose session file is nested under the parent's (`<parent>/<agentId>.jsonl`), but cannot see in-memory subagents or tell the agent type, so `agent_type` is absent.
 

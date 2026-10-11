@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import { DEFAULT_SOURCE } from "./hooks/shared";
-import { subagentIdentity } from "./subagent";
+import { sessionIdOfFile, subagentIdentity } from "./subagent";
 import type { HookContextDetails, HookContextEntry, HookExecutionContext, HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
@@ -37,6 +37,7 @@ export type HookModuleContext = {
     isActive: () => boolean;
     injectHiddenContext: HookModuleContext["injectHiddenContext"];
   };
+  /** The session's id (OMP's header id, a UUID): Claude Code's `session_id`. The file path is the `transcript_path`. */
   getSessionId: (ctx: ExtensionContext) => string;
   /**
    * Common hook fields for events that also run in subagents. A subagent reports the
@@ -117,15 +118,16 @@ export function createHookContext(
       };
     },
     getSessionId: (ctx: ExtensionContext) =>
-      ctx.sessionManager.getSessionFile() ?? "ephemeral",
+      ctx.sessionManager.getSessionId() || "ephemeral",
     identityFor: (ctx: ExtensionContext) => {
       const agent = subagentIdentity(ctx);
       if (!agent) {
         return { sessionId: shared.getSessionId(ctx), transcriptPath: ctx.sessionManager.getSessionFile() };
       }
-      // With no known parent (an in-memory subagent) the subagent's own session stands in.
+      // Without a known parent (an in-memory subagent, or an id its file does not record)
+      // the subagent's own session id stands in.
       return {
-        sessionId: agent.parentFile ?? shared.getSessionId(ctx),
+        sessionId: (agent.parentFile && sessionIdOfFile(agent.parentFile)) || shared.getSessionId(ctx),
         transcriptPath: agent.parentFile ?? agent.file,
         agentId: agent.agentId,
         agentType: agent.agentType,

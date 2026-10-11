@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 
@@ -9,7 +9,7 @@ export type SubagentIdentity = {
   agentType: string | undefined;
   /** The subagent's own session file; undefined for an in-memory session. */
   file: string | undefined;
-  /** The top-level session's file, which its own hooks send as session_id and transcript_path; undefined when unknown. */
+  /** The top-level session's file: its path is the transcript_path its own hooks send, its id the session_id; undefined when unknown. */
   parentFile: string | undefined;
 };
 
@@ -39,4 +39,43 @@ export function subagentIdentity(ctx: ExtensionContext): SubagentIdentity | unde
   if (agent) return { agentId: agent.id, agentType: agent.name, file, parentFile };
   if (!file || !parentFile) return undefined;
   return { agentId: path.basename(file, ".jsonl"), agentType: undefined, file, parentFile };
+}
+
+const HEADER_BYTES = 65_536;
+const idByFile = new Map<string, string>();
+
+/** The `id` in the session header, which OMP writes as the file's first JSONL line. */
+function headerId(file: string): string | undefined {
+  let fd: number | undefined;
+  try {
+    fd = openSync(file, "r");
+    const buffer = Buffer.allocUnsafe(HEADER_BYTES);
+    const [line] = buffer.toString("utf8", 0, readSync(fd, buffer, 0, HEADER_BYTES, 0)).split("\n", 1);
+    const header = JSON.parse(line) as { type?: unknown; id?: unknown } | null;
+    return header?.type === "session" && typeof header.id === "string" && header.id !== "" ? header.id : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** OMP names a session file `<timestamp>_<id>.jsonl`; the timestamp has no underscore. */
+function filenameId(file: string): string | undefined {
+  const stem = path.basename(file, ".jsonl");
+  const at = stem.lastIndexOf("_");
+  return at < 0 ? undefined : stem.slice(at + 1) || undefined;
+}
+
+/**
+ * The session id a session file records: its header id, else the id its name encodes
+ * (undefined for a name without one, such as a subagent's `<agentId>.jsonl`). Cached per
+ * file: a session's id never changes, and every subagent hook asks for its parent's.
+ */
+export function sessionIdOfFile(file: string): string | undefined {
+  const known = idByFile.get(file);
+  if (known) return known;
+  const id = headerId(file) ?? filenameId(file);
+  if (id) idByFile.set(file, id);
+  return id;
 }
