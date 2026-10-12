@@ -621,7 +621,8 @@ test("a slow Notification hook never delays the approval prompt or the next turn
   const release = path.join(project, "release");
   const recorded = path.join(project, "notified.jsonl");
   // Blocks until the test releases it, like a notifier waiting on the network.
-  const command = `while [ ! -f "${release}" ]; do sleep 0.05; done; { cat; echo; } >> "${recorded}"`;
+  // One write per record: both released hooks append at once, and a `cat; echo` pair can interleave.
+  const command = `while [ ! -f "${release}" ]; do sleep 0.05; done; printf '%s\\n' "$(cat)" >> "${recorded}"`;
   const handlers = new Map<string, Array<(event: unknown, ctx: unknown) => unknown>>();
   const pi = { on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.set(name, [...(handlers.get(name) ?? []), handler]), sendMessage: () => {} };
   registerHooks(pi as never, async () => ({ hooks: { Notification: [{ hooks: [{ type: "command", command }] }] } }), { approximations: true });
