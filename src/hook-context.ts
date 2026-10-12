@@ -28,7 +28,6 @@ export type HookModuleContext = {
   pi: ExtensionAPI;
   firedSessionStartKeys: Set<string>;
   pendingUserPromptContext?: HookContextEntry[];
-  stopHookActive: boolean;
   claimInjectedContext: (content: string) => boolean;
   resetInjectedContext: () => void;
   resetSession: () => void;
@@ -81,7 +80,6 @@ export function createHookContext(
     pi,
     firedSessionStartKeys: new Set<string>(),
     pendingUserPromptContext: undefined,
-    stopHookActive: false,
     claimInjectedContext: (content) => {
       if (disposed || injectedThisTurn.has(content)) return false;
       injectedThisTurn.add(content);
@@ -101,7 +99,6 @@ export function createHookContext(
       injectedThisTurn.clear();
       shared.firedSessionStartKeys.clear();
       shared.pendingUserPromptContext = undefined;
-      shared.stopHookActive = false;
     },
     dispose: () => {
       disposed = true;

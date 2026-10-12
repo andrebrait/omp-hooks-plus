@@ -103,7 +103,6 @@ export function registerPromptHooks(
     const delivery = shared.captureContext();
     shared.resetInjectedContext();
     shared.pendingUserPromptContext = undefined;
-    shared.stopHookActive = false;
     // Claude Code never fires UserPromptSubmit for a subagent's prompt.
     if (subagentIdentity(ctx)) return;
 

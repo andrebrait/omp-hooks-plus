@@ -93,6 +93,10 @@ const toolFailure = { ...toolResult, content: [{ type: "text", text: "boom" }], 
 const approval = { type: "tool_approval_requested", sessionId: "s", toolCallId: "t", toolName: "bash", approvalMode: "ask" };
 const compacted = { type: "session_compact", compactionEntry: { summary: "S" } };
 const agentStart = { type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] };
+// OMP's native Stop pass, which carries the session's own id and file.
+const stopPass = (sessionId: string, file: string) => ({
+  type: "session_stop", messages: [], turn_id: 0, session_id: sessionId, session_file: file, stop_hook_active: false, signal: new AbortController().signal,
+});
 
 test("ctx.agent decides subagent identity, including a depth-0 /tan clone", () => {
   const { root, parent, child, grandchild } = sessions();
@@ -197,26 +201,30 @@ test("a session file's id is its header id, else the id its name encodes, re-rea
   expect(sessionIdOfFile(twice)).toBeUndefined();
 });
 
-test("SessionStart (startup), UserPromptSubmit and SessionEnd run in the main session and skip subagents", async () => {
+test("SessionStart (startup), UserPromptSubmit, Stop and SessionEnd run in the main session and skip subagents", async () => {
   const { root, child, parent, log } = sessions();
   const settings: SettingsFile = { hooks: {
     SessionStart: [{ hooks: [record(log)] }],
     UserPromptSubmit: [{ hooks: [record(log)] }],
+    Stop: [{ hooks: [record(log)] }],
     SessionEnd: [{ hooks: [record(log)] }],
   } };
-  const lifecycle = async (emit: Emit, ctx: unknown) => {
+  const lifecycle = async (emit: Emit, ctx: unknown, stop: { type: string; [key: string]: unknown }) => {
     await emit({ type: "session_start" }, ctx);
     await emit({ type: "input", text: "hello", source: "interactive" }, ctx);
+    await emit(stop, ctx);
     await emit({ type: "session_shutdown" }, ctx);
   };
 
-  await lifecycle(adapter(settings), subCtx(root, child, explore));
-  await lifecycle(adapter(settings), subCtx(root, child, tan));
-  await lifecycle(adapter(settings), subCtx(root, child));
+  const subStop = stopPass(CHILD_ID, child);
+  await lifecycle(adapter(settings), subCtx(root, child, explore), subStop);
+  await lifecycle(adapter(settings), subCtx(root, child, tan), subStop);
+  await lifecycle(adapter(settings), subCtx(root, child), subStop);
   expect(records(log)).toEqual([]);
 
-  await lifecycle(adapter(settings), mainCtx(root, parent));
-  expect(records(log).map(entry => entry.hook_event_name)).toEqual(["SessionStart", "UserPromptSubmit", "SessionEnd"]);
+  await lifecycle(adapter(settings), mainCtx(root, parent), stopPass(PARENT_ID, parent));
+  expect(records(log).map(entry => entry.hook_event_name)).toEqual(["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]);
+  expect(records(log).find(entry => entry.hook_event_name === "Stop")).toMatchObject({ session_id: PARENT_ID, transcript_path: parent });
 });
 
 test("SessionStart runs in a subagent only for compaction, with the parent's identity", async () => {
@@ -258,7 +266,7 @@ test("a top-level session reports its session id, never its file path, and its f
   await emit(toolCall, ctx);
   await emit(toolResult, ctx);
   await emit({ type: "session_before_compact", customInstructions: "" }, ctx);
-  await emit({ type: "agent_end", messages: [] }, ctx);
+  await emit(stopPass(PARENT_ID, parent), ctx);
   await emit({ type: "session_shutdown" }, ctx);
 
   const sent = records(log);

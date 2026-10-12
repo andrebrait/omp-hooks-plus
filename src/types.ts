@@ -110,6 +110,14 @@ export interface HookExecutionContext {
   // Stop fields
   stopHookActive?: boolean;
   lastAssistantMessage?: string;
+  /**
+   * Host signal for the pass that is running these hooks. Aborting it (turn abort,
+   * session switch, disposal) cancels the owned hook process groups, including
+   * still-running async ones, and voids their verdicts. OMP's fixed 30-second handler
+   * budget does not abort it: past that, the host discards the result and the
+   * command keeps running until its own timeout.
+   */
+  abortSignal?: AbortSignal;
   // PreToolUse/PostToolUse/PostToolUseFailure fields
   toolName?: string;
   toolInput?: Record<string, unknown>;
@@ -142,6 +150,19 @@ export type NotifyFn = (
   message: string,
   type: "info" | "error" | "warning",
 ) => void;
+
+/** Outcome of running one command hook process. */
+export type HookCommandResult = {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  /**
+   * Set when the pass that owned this hook was cancelled. The process group is
+   * already terminated, so the output is not a hook verdict and must not be
+   * reported as a block or as a hook failure.
+   */
+  aborted?: boolean;
+};
 
 export type HookRunResult = {
   contexts?: HookContextEntry[];
