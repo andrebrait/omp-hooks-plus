@@ -5,6 +5,7 @@ import type {
 import { getHookGroups } from "../claude";
 import { extractTextFromContent } from "../helpers";
 import { hookReminders, type HookModuleContext } from "../hook-context";
+import { subagentIdentity } from "../subagent";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -117,6 +118,10 @@ export async function triggerStopHooks(
 
 export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
   pi.on("session_stop", async (event, ctx): Promise<SessionStopEventResult | undefined> => {
+    // Claude Code's Stop never fires for a subagent (that is SubagentStop), and OMP does
+    // not emit session_stop for one; this keeps the lifecycle skip explicit and host-independent.
+    if (subagentIdentity(ctx)) return;
+
     const delivery = shared.captureContext();
     // The host event is the authority for Stop metadata; the bridge keeps no copy
     // of it between passes.
