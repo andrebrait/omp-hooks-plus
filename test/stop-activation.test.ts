@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,6 +8,7 @@ import type {
   SessionStopEvent,
   SessionStopEventResult,
 } from "@oh-my-pi/pi-coding-agent";
+import * as executor from "../src/executor";
 import { createHookContext } from "../src/hook-context";
 import { registerStopHooks } from "../src/hooks/stop-hooks";
 import type { SettingsFile } from "../src/types";
@@ -253,5 +254,80 @@ describe("Stop bridge activation on the native session_stop event", () => {
 
     expect(run.notices).toEqual([[expect.stringContaining("Stop execution error"), "error"]]);
     run.shared.dispose();
+  });
+
+  test("an async hook finishing after the pass queues next-turn context and returns nothing to the host", async () => {
+    const run = mount({
+      hooks: {
+        Stop: [{
+          hooks: [{ type: "command", async: true, command: `printf '%s' '{"additionalContext":"Late finding"}'` }],
+        }],
+      },
+    });
+
+    // The pass settles with the async command still running: there is no verdict to return.
+    expect(await run.handler()!(stopEvent(), run.ctx)).toBeUndefined();
+
+    await run.firstSent;
+    expect(run.sent).toEqual([[
+      expect.objectContaining({ customType: "omp-hooks-plus", content: reminder("Late finding"), display: false }),
+      { deliverAs: "nextTurn" },
+    ]]);
+    run.shared.dispose();
+  });
+
+  test("asyncRewake cannot start a turn from Stop: its exit-2 message waits for the next turn", async () => {
+    const run = mount({
+      hooks: {
+        Stop: [{
+          hooks: [{ type: "command", async: true, asyncRewake: true, command: "printf '%s' 'Wake up' >&2; exit 2" }],
+        }],
+      },
+    });
+
+    expect(await run.handler()!(stopEvent(), run.ctx)).toBeUndefined();
+
+    await run.firstSent;
+    // The sink asked for a turn; the bridge must deliver without one.
+    expect(run.sent).toEqual([[
+      expect.objectContaining({ content: reminder("Wake up"), display: false }),
+      { deliverAs: "nextTurn" },
+    ]]);
+    run.shared.dispose();
+  });
+
+  test("an async hook that finishes after its pass was aborted delivers nothing", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "stop-abort-async-"));
+    roots.push(dir);
+    const pidFile = path.join(dir, "hook.pid");
+    const controller = new AbortController();
+    // On SIGTERM the command still prints context and exits 0: only the abort check can keep it out.
+    const command = `trap 'echo "{\\"additionalContext\\":\\"Late finding\\"}"; exit 0' TERM; echo "$$" > '${pidFile}'; sleep 30`;
+    const run = mount({ hooks: { Stop: [{ hooks: [{ type: "command", async: true, command }] }] } });
+    const inject = spyOn(run.shared, "injectHiddenContext");
+    // The async command settles on its own clock; observe the real completion callback.
+    const finished = Promise.withResolvers<void>();
+    const original = executor.executeHookAsync;
+    const completion = spyOn(executor, "executeHookAsync").mockImplementation(
+      (hook, input, cwd, timeoutMs, onComplete, signal) =>
+        original(hook, input, cwd, timeoutMs, (result) => {
+          onComplete(result);
+          finished.resolve();
+        }, signal),
+    );
+    try {
+      expect(await run.handler()!(stopEvent({ signal: controller.signal }), run.ctx)).toBeUndefined();
+      const pid = await readPidFile(pidFile);
+      controller.abort();
+
+      await finished.promise;
+      expect(await processGone(-pid)).toBe(true);
+      expect(inject).not.toHaveBeenCalled();
+      expect(run.sent).toHaveLength(0);
+      expect(run.notices).toEqual([]);
+    } finally {
+      completion.mockRestore();
+      run.shared.dispose();
+    }
   });
 });

@@ -139,6 +139,10 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
             ? extractTextFromContent(hostLastAssistantMessage.content)
             : findLastAssistantMessageText(event.messages),
         abortSignal: event.signal,
+        // An async command finishes after the native pass has settled, so nothing it
+        // prints can continue the turn, `asyncRewake` included (the sink's triggerTurn
+        // flag is dropped): its context waits for the next turn.
+        asyncContextSink: (content, details) => delivery.injectHiddenContext(content, details),
       },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
