@@ -111,9 +111,11 @@ export interface HookExecutionContext {
   stopHookActive?: boolean;
   lastAssistantMessage?: string;
   /**
-   * Host signal for the pass that is running these hooks. Aborting it (turn
-   * abort, session switch, host handler budget) cancels the owned hook process
-   * groups and voids their verdicts.
+   * Host signal for the pass that is running these hooks. Aborting it (turn abort,
+   * session switch, disposal) cancels the owned hook process groups, including
+   * still-running async ones, and voids their verdicts. OMP's fixed 30-second handler
+   * budget does not abort it: past that, the host discards the result and the
+   * command keeps running until its own timeout.
    */
   abortSignal?: AbortSignal;
   // PreToolUse/PostToolUse/PostToolUseFailure fields

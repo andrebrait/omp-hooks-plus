@@ -90,6 +90,12 @@ describe("Stop hook blocking exit codes", () => {
     expect(result.reason?.trim()).toBeTruthy();
   });
 
+  test("a JSON block without a reason names the fallback reason", async () => {
+    const result = await triggerStopHooks(context, settingsFor(`printf '%s' '{"decision":"block"}'`));
+
+    expect(result).toEqual({ blocked: true, reason: "Continue requested by Stop hook" });
+  });
+
   test("a block keeps the context other Stop hooks accumulated", async () => {
     const result = await triggerStopHooks(
       context,
