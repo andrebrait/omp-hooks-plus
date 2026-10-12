@@ -2,7 +2,8 @@ import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import { DEFAULT_SOURCE } from "./hooks/shared";
-import type { HookContextDetails, HookContextEntry, HookMatcherValue, SettingsFile } from "./types";
+import { sessionIdOfFile, subagentIdentity } from "./subagent";
+import type { HookContextDetails, HookContextEntry, HookExecutionContext, HookMatcherValue, SettingsFile } from "./types";
 
 export type NotifyType = "info" | "error" | "warning";
 
@@ -36,7 +37,13 @@ export type HookModuleContext = {
     isActive: () => boolean;
     injectHiddenContext: HookModuleContext["injectHiddenContext"];
   };
+  /** The session's id (OMP's header id, a UUID): Claude Code's `session_id`. The file path is the `transcript_path`. */
   getSessionId: (ctx: ExtensionContext) => string;
+  /**
+   * Common hook fields for events that also run in subagents. A subagent reports the
+   * top-level session, as Claude Code does, plus its own agent_id and agent_type.
+   */
+  identityFor: (ctx: ExtensionContext) => Pick<HookExecutionContext, "sessionId" | "transcriptPath" | "agentId" | "agentType">;
   notify: (ctx: ExtensionContext, msg: string, type: NotifyType) => void;
   injectHiddenContext: (
     content: string,
@@ -111,7 +118,23 @@ export function createHookContext(
       };
     },
     getSessionId: (ctx: ExtensionContext) =>
-      ctx.sessionManager.getSessionFile() ?? "ephemeral",
+      ctx.sessionManager.getSessionId() || "ephemeral",
+    identityFor: (ctx: ExtensionContext) => {
+      const agent = subagentIdentity(ctx);
+      if (!agent) {
+        return { sessionId: shared.getSessionId(ctx), transcriptPath: ctx.sessionManager.getSessionFile() };
+      }
+      // Without a resolvable parent (an in-memory subagent, or a parent file that records no id)
+      // the subagent's own session id and transcript stand in together, never one from each session.
+      const parentId = agent.parentFile && sessionIdOfFile(agent.parentFile);
+      return {
+        ...(parentId
+          ? { sessionId: parentId, transcriptPath: agent.parentFile }
+          : { sessionId: shared.getSessionId(ctx), transcriptPath: agent.file }),
+        agentId: agent.agentId,
+        agentType: agent.agentType,
+      };
+    },
     notify: (ctx: ExtensionContext, msg: string, type: NotifyType) =>
       ctx.ui.notify(msg, type),
     injectHiddenContext: (raw, details, triggerTurn = false, delivery = "nextTurn") => {
@@ -168,10 +191,14 @@ export function createHookContext(
       return toolResponse;
     },
     triggerSessionStartHook: async (matcher, ctx) => {
+      // Claude Code never fires SessionStart for a subagent at startup or resume; SubagentStart
+      // briefs it instead. Compaction is different: the subagent's context is rebuilt, so it
+      // gets the bootstrap context again, keyed on the parent's session.
+      if (matcher !== "compact" && subagentIdentity(ctx)) return;
       const delivery = shared.captureContext();
       const settings = await shared.settingsFor(ctx);
       if (!delivery.isActive()) return;
-      const sessionId = shared.getSessionId(ctx);
+      const { sessionId, agentId, agentType } = shared.identityFor(ctx);
       if (matcher === "compact") {
         // Compaction legitimately recurs within a session — unlike startup/resume,
         // it must reinject its bootstrap context every time, not just once. Reset
@@ -192,6 +219,8 @@ export function createHookContext(
         matcher,
         {
           sessionId,
+          agentId,
+          agentType,
           cwd: ctx.cwd,
           hookEventName: "SessionStart",
           source: matcher,

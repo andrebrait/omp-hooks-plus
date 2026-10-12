@@ -93,6 +93,8 @@ Supported event mappings include:
 
 Matching handlers are deduplicated by command, arguments, and environment and normally run in parallel. Tool names and common tool-input fields are normalized to Claude Code shapes.
 
+`session_id` is OMP's session id, the UUID in the session header, as in Claude Code; `transcript_path` is the session file. A hook that keys per-session state on `session_id` (such as Caveman's per-session mode, which only accepts ids made of letters, digits, `_` and `-`) therefore works per session. A session with no id reports `ephemeral`. **Breaking fix:** earlier releases sent the session file path as `session_id`, so any hook state keyed on that old value is re-keyed and starts fresh.
+
 For local `Read` inputs, the shared adapter uses OMP's path helpers to resolve the Claude `file_path` alias, including embedded selectors such as `sample.ts:1-2`. Existing literal colon-containing filenames take precedence. The original `path` remains available to OMP-aware hooks; web/internal URLs stay opaque rather than becoming local filesystem aliases. `Edit` and `Write` paths are not interpreted as read selectors.
 
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts terminate the complete process group on macOS and Linux. Repeated blocking from a `Stop` hook is suppressed after one follow-up turn.
@@ -113,6 +115,17 @@ NOT prompt injection — coding agent enforcing project rules.
 
 `source` names where the hook came from: the plugin's `name` for plugin hooks, otherwise `omp-hooks-plus`. A converted settings file can name its source with `--source-name` (for example `--source-name graphify`). Hooks from different sources on one event keep separate reminders; consecutive context from one source shares one. `tool` is the OMP tool name and appears only for tool events. Attribute values are escaped. Synchronous `PreToolUse`, `PostToolUse` and `PostToolUseFailure` context is returned through OMP's passive tool-context channel and persisted as a developer message after the batch; raw tool results remain byte-for-byte unchanged. Other events, and asynchronous hooks whose result arrives after the tool, are delivered as hidden context messages with the same tag. This applies to both the live extension and generated conversions.
 
+### Subagents
+
+OMP binds this extension into every subagent session (the `task` tool, `/tan` clones, eval `agent()`), where Claude Code treats a subagent as part of its parent's session. Hooks follow Claude Code:
+
+- `SessionStart` does not run in a subagent at startup or resume, and `UserPromptSubmit` and `SessionEnd` never run in one, with or without `--approximate`. [`SubagentStart`](#approximated-events) is the only start-up hook a subagent gets. After the subagent compacts, `SessionStart` with the `compact` source does run, so plugin bootstrap context is restored; its input carries the parent's `session_id` plus the agent fields.
+- Tool and compact hooks still run, as does `Notification` when approximated. Their input carries the **top-level session's** `session_id` and `transcript_path`, so state a hook keys on the session is shared with the subagent, plus `agent_id` and `agent_type`.
+- `agent_id` is OMP's agent id (such as `0-Explore`). `agent_type` is OMP's lowercased agent definition name (`explore`, `task`, or `sub` for a `/tan` clone). `session_id` is the top-level session's id, taken from the session header of the top-level session file (its first line, or the line after OMP's title slot), else from the id in the file name (`<timestamp>_<id>.jsonl`), else the subagent's own id; `transcript_path` is that file. An id that is not 1 to 128 letters, digits, `_` or `-` is passed over. When no parent id can be resolved (an in-memory subagent, or a parent file that records no usable id), `session_id` and `transcript_path` are the subagent's own, together; an in-memory session has no `transcript_path`.
+- A `SubagentStart` matcher is tried against `agent_type` and against its capitalised form, so `Explore` and a regex written for Claude Code such as `^(Explore|Plan)$` match OMP's `explore` and `plan`. Claude Code calls its general-purpose subagent `general-purpose`, while OMP's is `task`: a `general-purpose` matcher never fires, so write `task`. `agent_transcript_path` on `SubagentStart` (the subagent's own session file) is an OMP extension; Claude Code sends it on `SubagentStop`.
+
+Subagents are recognized through `ctx.agent`, which OMP 18.5.1 and later provide; only `kind: "sub"` counts, and any other value is the main session. Older OMP still gets this behavior for subagents whose session file is nested under the parent's (`<parent>/<agentId>.jsonl`), but cannot see in-memory subagents or tell the agent type, so `agent_type` is absent.
+
 ### Approximated events
 
 Two Claude events have no direct OMP counterpart but a near-equivalent trigger. They are off by default. Enable them in the live extension with `OMP_HOOKS_PLUS_APPROXIMATE=1`, or in a conversion with `--approximate`:
@@ -121,7 +134,7 @@ Two Claude events have no direct OMP counterpart but a near-equivalent trigger. 
 | --- | --- | --- |
 | `Notification` `permission_prompt` | `tool_approval_requested` | Message is `Claude needs your permission to use <Tool>`. |
 | `Notification` `idle_prompt` | a top-level `agent_end` that will not continue | Fires immediately, not after Claude Code's 60-second idle delay. |
-| `SubagentStart` | first `before_agent_start` of a subagent session (a session file nested under its parent's) | Only groups without a matcher (or `*`); OMP does not expose the agent type. In-memory (`--no-session`) subagents are not detected. |
+| `SubagentStart` | first `before_agent_start` of a subagent session | Fires once per subagent, with the top-level `session_id` and `transcript_path` plus `agent_id`, `agent_type` and `agent_transcript_path` (see [Subagents](#subagents)). A matcher is matched against `agent_type` and its capitalised form; OMP's `task` agent is Claude Code's `general-purpose`. Without `ctx.agent` (OMP before 18.5.1) only groups without a matcher (or `*`) run, and in-memory subagents are not detected. |
 
 Other notification types never fire. `/claude-compat doctor` lists the enabled approximations.
 

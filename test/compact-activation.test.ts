@@ -12,7 +12,7 @@ test("plugin bootstrap instructions return after every compaction", async () => 
   shared.injectHiddenContext = (content) => { injected.push(content); };
   const ctx = {
     cwd: process.cwd(),
-    sessionManager: { getSessionFile: () => "same-session" },
+    sessionManager: { getSessionFile: () => "same-session", getSessionId: () => "same-session" },
     ui: { notify: () => {} },
   } as unknown as ExtensionContext;
 

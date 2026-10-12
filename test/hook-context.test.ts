@@ -52,7 +52,7 @@ test("a blocking Stop hook's additional context rides its continuation as a name
   const shared = createHookContext(pi, async () => ({ hooks: { Stop: [{ hooks: [{ type: "command", command: `printf '%s' '${output}'` }] }] } }));
   contexts.push(shared);
   registerStopHooks(pi, shared);
-  await handlers.get("agent_end")!({ messages: [] }, { cwd: process.cwd(), sessionManager: { getSessionFile: () => "stop" }, ui: { notify: () => {} } });
+  await handlers.get("agent_end")!({ messages: [] }, { cwd: process.cwd(), sessionManager: { getSessionFile: () => "stop", getSessionId: () => "stop" }, ui: { notify: () => {} } });
   expect(messages.map(message => message.content)).toEqual([`Run the tests.\n\n${reminder("Stop", "Suite: bun test")}`]);
 });
 
@@ -67,7 +67,7 @@ test("an async tool hook's late context still names its event and tool", async (
   const shared = createHookContext(pi, async () => ({ hooks: { PostToolUse: [{ hooks: [{ type: "command", async: true, command: `printf '%s' '${output}'` }] }] } }));
   contexts.push(shared);
   registerToolHooks(pi, shared);
-  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "async" }, ui: { notify: () => {} } };
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "async", getSessionId: () => "async" }, ui: { notify: () => {} } };
   await handlers.get("tool_result")!({ toolName: "bash", toolCallId: "1", input: {}, content: [], isError: false }, ctx);
   expect(await delivered).toBe(reminder("PostToolUse", "late", "bash"));
 });
@@ -86,7 +86,7 @@ test("tool_result selects exactly one success or failure hook family", async () 
   } }));
   contexts.push(shared);
   registerToolHooks(pi, shared);
-  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "filter" }, ui: { notify: () => {} } };
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "filter", getSessionId: () => "filter" }, ui: { notify: () => {} } };
   const handler = handlers.get("tool_result")!;
 
   const success = await handler(
@@ -187,7 +187,7 @@ function pendingHook(eventName: "PreToolUse" | "UserPromptSubmit" | "Stop") {
   registerToolHooks(pi, shared);
   registerPromptHooks(pi, shared);
   registerStopHooks(pi, shared);
-  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "session" }, ui: { notify: () => {} } };
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => "session", getSessionId: () => "session" }, ui: { notify: () => {} } };
   return {
     shared, messages,
     run: (event: { type: string; [key: string]: unknown }) => handlers.get(event.type)!(event, ctx),
@@ -231,7 +231,7 @@ test("each ephemeral session receives startup context once after a session reset
     hooks: { SessionStart: [{ hooks: [{ type: "command", command: "printf 'bootstrap'" }] }] },
   }));
   contexts.push(shared);
-  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined }, ui: { notify: () => {} } } as unknown as ExtensionContext;
+  const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined, getSessionId: () => "" }, ui: { notify: () => {} } } as unknown as ExtensionContext;
   await shared.triggerSessionStartHook("startup", ctx);
   jest.advanceTimersByTime(70);
   await shared.triggerSessionStartHook("startup", ctx);

@@ -34,7 +34,7 @@ export const HOOK_KEYS: Array<keyof HooksConfig> = [
  */
 export const APPROXIMATIONS: Record<"Notification" | "SubagentStart", string> = {
   Notification: "Approximated: permission_prompt fires on OMP tool_approval_requested; idle_prompt fires when a top-level agent run ends (agent_end), immediately rather than after Claude Code's 60-second idle delay. Other notification types never fire; hook output is ignored, as in Claude Code.",
-  SubagentStart: "Approximated: fires before the first run of an OMP subagent session (a session file nested under its parent's), delivering context to that subagent. OMP does not expose the agent type, so only groups without a matcher (or with \"*\") are approximated; in-memory subagent sessions are not detected.",
+  SubagentStart: "Approximated: fires once before the first run of an OMP subagent session (a task subagent, an in-memory subagent or a /tan clone), delivering context to that subagent. session_id and transcript_path name the top-level session, as in Claude Code; agent_id, agent_type (OMP's lowercased agent name, such as \"explore\") and agent_transcript_path (an OMP extension) name the subagent. A matcher is matched against agent_type and its capitalised form (so ^Explore$ matches \"explore\"); OMP's general agent is \"task\", where Claude Code says \"general-purpose\". Needs OMP 18.5.1 or later, which reports the agent; older OMP detects only subagent sessions nested under their parent's, cannot tell the agent type, and runs only groups without a matcher (or with \"*\").",
 };
 export const APPROXIMATED_KEYS = Object.keys(APPROXIMATIONS) as Array<keyof typeof APPROXIMATIONS>;
 

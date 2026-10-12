@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { HookModuleContext } from "../hook-context";
+import { subagentIdentity } from "../subagent";
 import type {
   HookExecutionContext,
   HookMatcherValue,
@@ -43,6 +44,8 @@ export function registerSessionHooks(
 
   pi.on("session_shutdown", async (_event, ctx) => {
     shared.dispose();
+    // Claude Code never fires SessionEnd for a subagent.
+    if (subagentIdentity(ctx)) return;
     const reason = "other";
 
     // SessionEnd is always triggered by session_shutdown; matcher uses "other" only.

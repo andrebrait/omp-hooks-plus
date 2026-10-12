@@ -26,6 +26,8 @@ export function buildHookInput(ctx: HookExecutionContext): object {
     cwd: ctx.cwd,
     hook_event_name: ctx.hookEventName,
     transcript_path: ctx.transcriptPath,
+    ...(ctx.agentId !== undefined ? { agent_id: ctx.agentId } : {}),
+    ...(ctx.agentType !== undefined ? { agent_type: ctx.agentType } : {}),
   };
 
   if (ctx.hookEventName === "PreCompact") {
@@ -135,7 +137,7 @@ export function buildHookInput(ctx: HookExecutionContext): object {
   }
 
   if (ctx.hookEventName === "SubagentStart") {
-    return { ...base, agent_id: ctx.agentId };
+    return { ...base, agent_transcript_path: ctx.agentTranscriptPath };
   }
 
   if (ctx.hookEventName === "SessionEnd") {

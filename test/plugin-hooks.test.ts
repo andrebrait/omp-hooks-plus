@@ -469,7 +469,7 @@ test("OMP_HOOKS_PLUS_APPROXIMATE=1 enables approximated events in the on-the-fly
   }
 });
 
-test("plugin diagnostics name the declaring file, and typed SubagentStart matchers are reported rather than loaded", async () => {
+test("plugin diagnostics name the declaring file, and typed SubagentStart matchers load", async () => {
   const root = tempRoot();
   const home = path.join(root, "home");
   const repo = path.join(root, "repo");
@@ -491,6 +491,6 @@ test("plugin diagnostics name the declaring file, and typed SubagentStart matche
   const loaded = await loadSettings(repo, { home, projectTrusted: false, approximate: true });
 
   expect(loaded.unsupported).toContain(`Claude plugin hook event "SubagentStop" in ${manifest} is not supported`);
-  expect(loaded.unsupported).toContain(`SubagentStart matcher "Explore" in ${manifest} is not supported: OMP does not expose a subagent's agent type`);
-  expect(getHookGroups(loaded.settings, "SubagentStart").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["echo any"]);
+  expect(loaded.unsupported.some((item) => item.includes("SubagentStart matcher"))).toBe(false);
+  expect(getHookGroups(loaded.settings, "SubagentStart").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["echo typed", "echo any"]);
 });

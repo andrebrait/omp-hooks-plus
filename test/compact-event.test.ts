@@ -24,7 +24,7 @@ test('compaction deduplicates matching hooks and restores distinct instructions 
   });
   registerCompactHooks(api, shared);
   const ctx = {
-    cwd: process.cwd(), sessionManager: { getSessionFile: () => 'compact-event' },
+    cwd: process.cwd(), sessionManager: { getSessionFile: () => 'compact-event', getSessionId: () => 'compact-event' },
     ui: { notify: () => {} },
   } as unknown as ExtensionContext;
   const compact = async () => {

@@ -17,7 +17,7 @@ test("compaction restores bootstrap context to the model without a new user prom
   }));
   const ctx = {
     cwd: process.cwd(),
-    sessionManager: { getSessionFile: () => "model-context-session" },
+    sessionManager: { getSessionFile: () => "model-context-session", getSessionId: () => "model-context-session" },
     ui: { notify: () => {} },
   } as unknown as ExtensionContext;
 

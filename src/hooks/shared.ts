@@ -420,13 +420,15 @@ export async function triggerSimpleHooks(
   context: HookExecutionContext,
   settings: SettingsFile | undefined,
   notify?: NotifyFn,
+  /** Other spellings of `matcherValue` that a matcher may also name. */
+  matcherAliases: string[] = [],
 ): Promise<HookRunResult> {
   const groups = getHookGroups(settings, eventName);
   const collected = collectMatchingHooks(
     groups,
     context,
     matcherValue,
-    [],
+    matcherAliases,
     eventName === "SessionEnd"
       ? (group) => group.matcher ?? "other"
       : undefined,

@@ -51,19 +51,6 @@ const NATIVE_KEYS = keySet(HOOK_KEYS);
 const ALL_KEYS: Array<keyof HooksConfig> = [...HOOK_KEYS, ...APPROXIMATED_KEYS];
 
 const CLAUDE_PLUGINS_PROVIDER_ID = "claude-plugins";
-/** OMP does not expose a subagent's agent type: only untyped SubagentStart groups can run. */
-function dropTypedSubagentMatchers(hooks: HooksConfig | undefined, source: string, unsupported?: Set<string>): void {
-  const groups = hooks?.SubagentStart;
-  if (!hooks || !groups) return;
-  const kept = groups.filter((group) => {
-    const matcher = group.matcher?.trim();
-    if (!matcher || matcher === "*") return true;
-    unsupported?.add(`SubagentStart matcher "${group.matcher}" in ${source} is not supported: OMP does not expose a subagent's agent type`);
-    return false;
-  });
-  if (kept.length > 0) hooks.SubagentStart = kept;
-  else delete hooks.SubagentStart;
-}
 
 export function readSettingsFile(
   settingsPath: string,
@@ -79,9 +66,7 @@ export function readSettingsFile(
         if (!Object.hasOwn(keys, event)) unsupported.add(`Hook event "${event}" in ${settingsPath} is not supported`);
       }
     }
-    const settings = parseSettings(raw, ALL_KEYS.filter((key) => Object.hasOwn(keys, key)));
-    dropTypedSubagentMatchers(settings?.hooks, settingsPath, unsupported);
-    return settings;
+    return parseSettings(raw, ALL_KEYS.filter((key) => Object.hasOwn(keys, key)));
   } catch {
     return undefined;
   }
@@ -182,7 +167,6 @@ function parsePluginHooksConfig(
       .filter((group): group is HookGroup => group !== undefined);
     if (groups.length > 0) hooks[key as keyof HooksConfig] = groups;
   }
-  dropTypedSubagentMatchers(hooks, sourceDescription, unsupported);
   return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 

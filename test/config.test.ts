@@ -183,17 +183,16 @@ describe("events outside the native set", () => {
     expect(loaded.unsupported.some((item) => item.includes("Notification") && item.includes("not supported"))).toBe(false);
     expect(loaded.approximated).toEqual([
       expect.stringContaining("Notification: Approximated: permission_prompt fires on OMP tool_approval_requested"),
-      expect.stringContaining("SubagentStart: Approximated: fires before the first run of an OMP subagent session"),
+      expect.stringContaining("SubagentStart: Approximated: fires once before the first run of an OMP subagent session"),
     ]);
   });
 });
 
-test("a typed SubagentStart matcher in a settings file is reported rather than loaded", async () => {
+test("a typed SubagentStart matcher in a settings file is loaded to match the agent type", async () => {
   const root = tempRoot();
   const home = path.join(root, "home");
-  const settingsPath = path.join(home, ".claude", "settings.json");
-  writeJson(settingsPath, { hooks: { SubagentStart: [{ matcher: "Explore", hooks: [hook("typed")] }, { matcher: "*", hooks: [hook("any")] }] } });
+  writeJson(path.join(home, ".claude", "settings.json"), { hooks: { SubagentStart: [{ matcher: "Explore", hooks: [hook("typed")] }, { matcher: "*", hooks: [hook("any")] }] } });
   const loaded = await loadSettings(root, { home, approximate: true });
-  expect(getHookGroups(loaded.settings, "SubagentStart").flatMap((group) => group.hooks ?? []).map((item) => item.command)).toEqual(["any"]);
-  expect(loaded.unsupported).toContain(`SubagentStart matcher "Explore" in ${settingsPath} is not supported: OMP does not expose a subagent's agent type`);
+  expect(getHookGroups(loaded.settings, "SubagentStart").map((group) => [group.matcher, group.hooks?.[0]?.command])).toEqual([["Explore", "typed"], ["*", "any"]]);
+  expect(loaded.unsupported.some((item) => item.includes("SubagentStart matcher"))).toBe(false);
 });

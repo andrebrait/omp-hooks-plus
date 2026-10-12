@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { getHookGroups } from "../claude";
 import { hookReminders, type HookModuleContext } from "../hook-context";
+import { subagentIdentity } from "../subagent";
 import type {
   HookExecutionContext,
   NotifyFn,
@@ -103,6 +104,8 @@ export function registerPromptHooks(
     shared.resetInjectedContext();
     shared.pendingUserPromptContext = undefined;
     shared.stopHookActive = false;
+    // Claude Code never fires UserPromptSubmit for a subagent's prompt.
+    if (subagentIdentity(ctx)) return;
 
     const result = await triggerUserPromptSubmitHooks(
       {
