@@ -30,12 +30,15 @@ afterEach(() => {
 function mount(settings: SettingsFile) {
   const handlers = new Map<string, StopHandler>();
   const sent: unknown[] = [];
+  const firstSent = Promise.withResolvers<void>();
+  const notices: [string, string][] = [];
   const pi = {
     on: (event: string, handler: StopHandler) => {
       handlers.set(event, handler);
     },
     sendMessage: (...args: unknown[]) => {
       sent.push(args);
+      firstSent.resolve();
     },
   } as unknown as ExtensionAPI;
   // The real hook context: only the ExtensionAPI boundary is replaced.
@@ -44,10 +47,10 @@ function mount(settings: SettingsFile) {
   const ctx = {
     cwd: process.cwd(),
     sessionManager: { getSessionFile: () => "stale-session-file" },
-    ui: { notify: () => {} },
+    ui: { notify: (message: string, type: string) => notices.push([message, type]) },
   } as unknown as ExtensionContext;
   registerStopHooks(pi, shared);
-  return { handler: () => handlers.get("session_stop"), sent, ctx, shared };
+  return { handler: () => handlers.get("session_stop"), sent, firstSent: firstSent.promise, notices, ctx, shared };
 }
 
 function stopEvent(overrides: Partial<SessionStopEvent> = {}): SessionStopEvent {
@@ -142,7 +145,7 @@ describe("Stop bridge activation on the native session_stop event", () => {
     run.shared.dispose();
   });
 
-  test("context alone asks the host to continue, without the bridge opening a turn", async () => {
+  test("context alone never continues the turn: it waits as next-turn context", async () => {
     const run = mount({
       hooks: {
         Stop: [{
@@ -155,8 +158,14 @@ describe("Stop bridge activation on the native session_stop event", () => {
 
     const result = await handler!(stopEvent(), run.ctx);
 
-    expect(result).toEqual({ continue: true, additionalContext: reminder("Re-read the failing assertion") });
-    expect(run.sent).toHaveLength(0);
+    // Claude Code continues only on a block; the host would otherwise run another model turn.
+    expect(result).toBeUndefined();
+    // The reminder is debounced before it is queued; await the message the code sends.
+    await run.firstSent;
+    expect(run.sent).toEqual([[
+      expect.objectContaining({ customType: "omp-hooks-plus", content: reminder("Re-read the failing assertion"), display: false }),
+      { deliverAs: "nextTurn" },
+    ]]);
     run.shared.dispose();
   });
 
@@ -205,6 +214,44 @@ describe("Stop bridge activation on the native session_stop event", () => {
     expect(await pending).toBeUndefined();
     expect(await processGone(-pid)).toBe(true);
     expect(run.sent).toHaveLength(0);
+    // The kill is the cancellation, not a failing hook: nothing is reported.
+    expect(run.notices).toEqual([]);
+    run.shared.dispose();
+  });
+
+  test("an executor error in a cancelled pass is not reported either", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "stop-abort-error-"));
+    roots.push(dir);
+    const pidFile = path.join(dir, "hook.pid");
+    const controller = new AbortController();
+    const run = mount({
+      hooks: {
+        Stop: [{
+          hooks: [
+            { type: "command", command: `echo "$$" > '${pidFile}'; sleep 30` },
+            // A NUL byte makes spawn throw: an executor error that surfaces only once the pass has settled.
+            { type: "command", command: "exit 0\u0000" },
+          ],
+        }],
+      },
+    });
+
+    const pending = run.handler()!(stopEvent({ signal: controller.signal }), run.ctx);
+    const pid = await readPidFile(pidFile);
+    controller.abort();
+
+    expect(await pending).toBeUndefined();
+    expect(await processGone(-pid)).toBe(true);
+    expect(run.notices).toEqual([]);
+    run.shared.dispose();
+  });
+
+  test("an executor error in a live pass is reported", async () => {
+    const run = mount({ hooks: { Stop: [{ hooks: [{ type: "command", command: "exit 0\u0000" }] }] } });
+
+    expect(await run.handler()!(stopEvent(), run.ctx)).toBeUndefined();
+
+    expect(run.notices).toEqual([[expect.stringContaining("Stop execution error"), "error"]]);
     run.shared.dispose();
   });
 });

@@ -110,7 +110,7 @@ export async function triggerStopHooks(
 
   if (blockReasons.length > 0) {
     result.blocked = true;
-    result.reason = blockReasons[0] ?? JSON_BLOCK_REASON;
+    result.reason = blockReasons[0];
   }
 
   return result;
@@ -146,24 +146,24 @@ export function registerStopHooks(pi: ExtensionAPI, shared: HookModuleContext) {
 
     // The settle pass that started this run is gone — the turn was aborted or the
     // user switched sessions. Its verdict belongs to a turn nobody awaits, so it
-    // must not ask the host to continue.
+    // must neither ask the host to continue nor queue context.
     if (!delivery.isActive() || event.signal.aborted) return;
 
-    // Claude Code delivers the block reason as Stop feedback and any hook context
-    // beside it as its own named hook reminder. A native block carries only `reason`,
+    // Claude Code continues only on a block. Its reason is Stop feedback, and any hook
+    // context beside it is its own named reminder; a native block carries only `reason`,
     // so both ride in it.
-    const context = result.contexts ? hookReminders(result.contexts, { hookEventName: "Stop" }) : undefined;
-
     if (result.blocked) {
+      const context = result.contexts ? hookReminders(result.contexts, { hookEventName: "Stop" }) : undefined;
       return {
         decision: "block",
-        reason: [result.reason ?? JSON_BLOCK_REASON, context]
-          .filter((value): value is string => Boolean(value))
-          .join("\n\n"),
+        reason: [result.reason, context].filter((value): value is string => Boolean(value)).join("\n\n"),
       };
     }
 
-    if (context) return { continue: true, additionalContext: context };
+    // Context alone never continues the turn: it waits as hidden context for the next one.
+    for (const { source, text } of result.contexts ?? []) {
+      delivery.injectHiddenContext(text, { hookEventName: "Stop", source });
+    }
 
     return;
   });
