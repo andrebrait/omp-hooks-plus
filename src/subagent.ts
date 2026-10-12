@@ -66,14 +66,15 @@ const HEADER_BYTES = 65_536;
 /** What a hook can key per-session state on: the id charset every Claude Code session id uses. */
 const SESSION_ID = /^[\w-]{1,128}$/;
 
-/** The `id` in the session header, which OMP writes as the file's first JSONL line. */
+/** The `id` in the session header: the first JSONL line, or the second after OMP's title slot. */
 function headerId(file: string): string | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(file, "r");
     const buffer = Buffer.allocUnsafe(HEADER_BYTES);
-    const [line] = buffer.toString("utf8", 0, readSync(fd, buffer, 0, HEADER_BYTES, 0)).split("\n", 1);
-    const header: unknown = JSON.parse(line);
+    const lines = buffer.toString("utf8", 0, readSync(fd, buffer, 0, HEADER_BYTES, 0)).split("\n", 2);
+    let header: unknown = JSON.parse(lines[0]);
+    if (isRecord(header) && header.type === "title") header = JSON.parse(lines[1] ?? "");
     return isRecord(header) && header.type === "session" && typeof header.id === "string" && SESSION_ID.test(header.id) ? header.id : undefined;
   } catch {
     return undefined;

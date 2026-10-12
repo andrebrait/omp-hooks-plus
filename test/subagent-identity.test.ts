@@ -187,6 +187,14 @@ test("a session file's id is its header id, else the id its name encodes, re-rea
   const longest = path.join(root, "longest.jsonl");
   writeFileSync(longest, header("x".repeat(128)));
   expect(sessionIdOfFile(longest)).toBe("x".repeat(128));
+  // OMP writes a padded title slot before the header; the name encodes no id, so only the header can answer.
+  const titled = path.join(root, "titled.jsonl");
+  writeFileSync(titled, `${JSON.stringify({ type: "title", v: 1, title: "t", pad: " ".repeat(64) })}\n${header(PARENT_ID)}`);
+  expect(sessionIdOfFile(titled)).toBe(PARENT_ID);
+  // Only one title slot is skipped: a second title line is not a header.
+  const twice = path.join(root, "twice.jsonl");
+  writeFileSync(twice, `${JSON.stringify({ type: "title" })}\n${JSON.stringify({ type: "title" })}\n${header(PARENT_ID)}`);
+  expect(sessionIdOfFile(twice)).toBeUndefined();
 });
 
 test("SessionStart (startup), UserPromptSubmit and SessionEnd run in the main session and skip subagents", async () => {
