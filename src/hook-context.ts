@@ -24,9 +24,7 @@ export function hookReminders(contexts: HookContextEntry[], details: HookContext
   return contexts.map(({ source, text }) => hookReminder(text, { ...details, source })).join("\n\n");
 }
 
-/** Marks the session-context message so the `context` handler finds its own copy by property, never by text. */
-export const SESSION_CONTEXT = "ompHooksPlusSessionContext";
-export type SessionContextMessage = ContextEvent["messages"][number] & { [SESSION_CONTEXT]: true };
+type SessionContextMessage = ContextEvent["messages"][number];
 type SessionContextEvent = "SessionStart" | "SubagentStart";
 
 export type HookModuleContext = {
@@ -119,11 +117,17 @@ export function createHookContext(
     sessionContextMessage: () => sessionMessage,
     setSessionContext: (entries, hookEventName, replace) => {
       if (replace) sessionContext.clear();
-      for (const { source, text } of entries ?? []) sessionContext.set(source, { text, hookEventName });
+      // One run can return a source more than once (non-consecutive hooks); keep every part.
+      const answered = new Set<string>();
+      for (const { source, text } of entries ?? []) {
+        const earlier = answered.has(source) ? sessionContext.get(source)?.text : undefined;
+        sessionContext.set(source, { text: earlier === undefined ? text : `${earlier}\n${text}`, hookEventName });
+        answered.add(source);
+      }
       const text = [...sessionContext].map(([source, entry]) => hookReminder(entry.text, { hookEventName: entry.hookEventName, source })).join("\n\n");
       // Rebuilt only when the held context changes, so every request carries identical bytes.
       sessionMessage = text
-        ? { role: "user", content: [{ type: "text", text }], timestamp: Date.now(), [SESSION_CONTEXT]: true }
+        ? { role: "user", content: [{ type: "text", text }], timestamp: Date.now() }
         : undefined;
     },
     captureContext: () => {
@@ -219,14 +223,12 @@ export function createHookContext(
       if (!delivery.isActive()) return;
       const identity = shared.identityFor(ctx);
       if (matcher === "compact") {
-        // Compaction legitimately recurs within a session, so it is never deduplicated. The
-        // per-turn content guard resets too, so an async hook can deliver the same text again.
+        // The per-turn content guard resets, so an async hook can deliver the same text again.
         shared.resetInjectedContext();
-      } else {
+      } else if (matcher === "startup" || matcher === "resume") {
+        // The host can announce one session load more than once; transitions fire once each.
         const dedupeKey = `${matcher}:${identity.sessionId}`;
-        if (shared.firedSessionStartKeys.has(dedupeKey)) {
-          return;
-        }
+        if (shared.firedSessionStartKeys.has(dedupeKey)) return;
         shared.firedSessionStartKeys.add(dedupeKey);
       }
 

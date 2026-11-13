@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, jest, test } from "bun:test";
@@ -254,7 +254,8 @@ test("an aborted Stop pass drops the hook verdict instead of continuing", async 
 });
 
 test("each ephemeral session runs its startup hook once after a session reset", async () => {
-  const counter = path.join(mkdtempSync(path.join(tmpdir(), "omp-hooks-reset-")), "runs");
+  const dir = mkdtempSync(path.join(tmpdir(), "omp-hooks-reset-"));
+  const counter = path.join(dir, "runs");
   const shared = createHookContext({} as ExtensionAPI, async () => ({
     hooks: { SessionStart: [{ hooks: [{ type: "command", command: `n=$(($(cat '${counter}' 2>/dev/null || echo 0) + 1)); echo $n > '${counter}'; printf "bootstrap $n"` }] }] },
   }));
@@ -267,6 +268,7 @@ test("each ephemeral session runs its startup hook once after a session reset", 
   shared.resetSession();
   await shared.triggerSessionStartHook("startup", ctx);
   expect(held()).toBe(r("bootstrap 2"));
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("the same text from two sources reaches the model once per source", () => {

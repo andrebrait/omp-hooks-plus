@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { SESSION_CONTEXT, type HookModuleContext } from "../hook-context";
+import type { HookModuleContext } from "../hook-context";
 import { subagentIdentity } from "../subagent";
 import type {
   HookExecutionContext,
@@ -28,31 +28,21 @@ export function registerSessionHooks(
   // SessionStart: session_start -> startup or resume; session_switch -> clear (new), resume, fork;
   // session_branch -> fork; session_compact -> compact (compact-hooks.ts). session_tree keeps the held context.
   // SessionEnd: session_switch new/resume -> clear/resume for the previous session; session_shutdown -> other.
+  // Claude Code discards SessionEnd output, so nothing it returns is delivered.
   const runSessionEnd = async (
     ctx: ExtensionContext,
     reason: SessionEndReason,
     identity: { sessionId: string; transcriptPath?: string },
-    deliver: boolean,
   ) => {
     // Claude Code never fires SessionEnd for a subagent.
     if (subagentIdentity(ctx)) return;
-    const result = await triggerSessionHooks(
+    await triggerSessionHooks(
       "SessionEnd",
       reason,
-      {
-        ...identity,
-        cwd: ctx.cwd,
-        hookEventName: "SessionEnd",
-        reason,
-        asyncContextSink: deliver ? shared.captureContext().injectHiddenContext : undefined,
-      },
+      { ...identity, cwd: ctx.cwd, hookEventName: "SessionEnd", reason },
       await shared.settingsFor(ctx),
       (msg, type) => shared.notify(ctx, msg, type),
     );
-    if (!deliver) return;
-    for (const { source, text } of result.contexts ?? []) {
-      shared.injectHiddenContext(text, { hookEventName: "SessionEnd", source });
-    }
   };
 
   pi.on("session_start", async (_event, ctx) => {
@@ -69,11 +59,12 @@ export function registerSessionHooks(
   });
 
   pi.on("session_switch", async (event, ctx) => {
+    // The outgoing session's context must not reach the new session while its SessionStart runs.
+    shared.setSessionContext(undefined, "SessionStart", true);
     const ended = previous;
     previous = undefined;
     if (event.reason !== "fork" && ended) {
-      // The previous session is over: its SessionEnd output has no session to reach.
-      await runSessionEnd(ctx, event.reason === "new" ? "clear" : "resume", ended, false);
+      await runSessionEnd(ctx, event.reason === "new" ? "clear" : "resume", ended);
     }
     await shared.triggerSessionStartHook(event.reason === "new" ? "clear" : event.reason, ctx);
   });
@@ -82,20 +73,21 @@ export function registerSessionHooks(
     await shared.triggerSessionStartHook("fork", ctx);
   });
 
+  // shortcut: OMP also runs this for each live-steering batch and marks no batch as one, so a
+  // mid-stream steer re-sends the held context; skip steer batches once the host marks them.
   pi.on("context", (event) => {
     const message = shared.sessionContextMessage();
-    const messages = event.messages.filter(entry => !(SESSION_CONTEXT in entry));
-    if (message) {
-      // After leading summaries, the same position on every request: the prefix stays byte-stable.
-      let index = 0;
-      while (messages[index]?.role === "compactionSummary" || messages[index]?.role === "branchSummary") index++;
-      messages.splice(index, 0, message);
-    }
-    if (message || messages.length !== event.messages.length) return { messages };
+    if (!message) return;
+    // After leading summaries, the same position on every request: the prefix stays byte-stable.
+    const messages = [...event.messages];
+    let index = 0;
+    while (messages[index]?.role === "compactionSummary" || messages[index]?.role === "branchSummary") index++;
+    messages.splice(index, 0, message);
+    return { messages };
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
     shared.dispose();
-    await runSessionEnd(ctx, "other", { sessionId: shared.getSessionId(ctx), transcriptPath: ctx.sessionManager.getSessionFile() }, true);
+    await runSessionEnd(ctx, "other", { sessionId: shared.getSessionId(ctx), transcriptPath: ctx.sessionManager.getSessionFile() });
   });
 }

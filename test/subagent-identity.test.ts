@@ -281,7 +281,7 @@ test("session transitions fire Claude's SessionStart sources and SessionEnd reas
   ]);
 });
 
-test("held session context leads every request after summaries and replaces its earlier copy", async () => {
+test("held session context leads every request after summaries with identical bytes", async () => {
   const { root, parent } = sessions();
   const emit = adapter({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "printf BOOT" }] }] } });
   const ctx = mainCtx(root, parent);
@@ -291,9 +291,9 @@ test("held session context leads every request after summaries and replaces its 
   const [first] = await emit({ type: "context", messages: [summary, user] }, ctx) as [{ messages: Array<Record<string, unknown>> }];
   expect(first.messages.map(message => message.role)).toEqual(["compactionSummary", "user", "user"]);
   expect(JSON.stringify(first.messages[1])).toContain("BOOT");
-  // A copy carried into the next request is replaced, not duplicated, and the bytes are identical.
-  const [second] = await emit({ type: "context", messages: first.messages }, ctx) as [{ messages: unknown[] }];
-  expect(second.messages).toEqual(first.messages);
+  // The next request carries the same bytes at the same position, so the cached prefix holds.
+  const [second] = await emit({ type: "context", messages: [summary, user, { role: "assistant", content: [] }] }, ctx) as [{ messages: unknown[] }];
+  expect(second.messages.slice(0, 3)).toEqual(first.messages);
 });
 
 test("a top-level session reports its session id, never its file path, and its file as the transcript", async () => {

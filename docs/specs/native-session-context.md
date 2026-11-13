@@ -47,7 +47,7 @@ SessionEnd for a switch uses the previous session's id and transcript, captured 
 - SessionStart (any source) and SubagentStart results replace the store.
 - SessionStart `compact` replaces only the entries of sources that returned context; other sources keep their startup context.
 - A session switch clears the store before the new SessionStart runs. Shutdown clears it.
-- The `context` handler removes any earlier copy of its own message (matched by a message property, never by text), then inserts one message after leading compaction and branch summaries. The text uses today's `hookReminders` format. The message is never persisted.
+- The `context` handler inserts one message after leading compaction and branch summaries. The host passes a fresh copy of the persisted messages, which never contain it. The text uses today's `hookReminders` format. The message is never persisted.
 
 ## Left to the builder
 

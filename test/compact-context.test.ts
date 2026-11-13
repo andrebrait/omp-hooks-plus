@@ -30,3 +30,12 @@ test("compaction refreshes the held bootstrap context of the hooks that answered
   shared.dispose();
   expect(shared.sessionContextMessage()).toBeUndefined();
 });
+
+test("a source answering twice in one run keeps both parts in its held context", () => {
+  const shared = createHookContext({} as ExtensionAPI, async () => undefined);
+  shared.setSessionContext([
+    { source: "a", text: "A1" }, { source: "b", text: "B1" }, { source: "a", text: "A2" },
+  ], "SessionStart", true);
+  expect((shared.sessionContextMessage()?.content as [{ text: string }])[0].text).toBe(`${reminder("A1\nA2", "a")}\n\n${reminder("B1", "b")}`);
+  shared.dispose();
+});

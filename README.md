@@ -173,6 +173,8 @@ The doctor reports these limits rather than implying full parity. OMP's native C
 
 Both the live bridge and generated hooks depend on OMP emitting the mapped events. In hosts where RPC/Ctrl+Enter bypass `input`, `UserPromptSubmit` cannot intercept those submissions. If queue-started runs bypass `before_agent_start`, prompt-context preparation is not delivered there. These are host dispatch limitations, not repaired by replaying input, hooking every provider request, or treating synthetic continuations as new user submissions.
 
+OMP treats every message an extension adds through its `context` event as per-request context. On Anthropic models its cache breakpoints stop at the first such message, so holding session context at the head of the request leaves only the latest messages anchored: long sessions lose the intermediate history cache points. OMP also runs `context` on each live-steering batch without marking it as one, so a mid-stream steer on a provider with live steering (OpenAI Codex) re-sends the held context.
+
 Hook-produced text is content, not a slash-command invocation. The bridge creates no skill aliases and does not reinterpret `sendUserMessage` as command execution. Session shutdown still runs `SessionEnd` commands, but does not deliver reminders or start new turns after disposal.
 
 ## One-shot conversion
