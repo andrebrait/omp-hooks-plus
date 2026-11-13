@@ -498,3 +498,30 @@ test("without ctx.agent only untyped SubagentStart groups run", async () => {
   await emit(agentStart, subCtx(root, child));
   expect(tags(log)).toEqual(["star", "untyped"]);
 });
+
+test("a switch that commits while an earlier SessionEnd runs owns the session, and SessionEnd reports the outgoing cwd", async () => {
+  const { root, parent, log } = sessions();
+  const outgoing = path.join(root, "outgoing");
+  mkdirSync(outgoing);
+  const settings: SettingsFile = { hooks: {
+    SessionEnd: [{ hooks: [{ type: "command", command: `sleep 0.3; printf '%s\\n' "$(cat)" >> "${log}"` }] }],
+    SessionStart: [{ hooks: [{ type: "command", command: `input=$(cat); printf '%s\\n' "$input" >> "${log}"; printf "$(printf '%s' "$input" | sed 's/.*"source":"\\([a-z]*\\)".*/\\1/')"` }] }],
+  } };
+  const emit = adapter(settings);
+  const a = ctxFor(outgoing, parent, PARENT_ID, main);
+  const b = ctxFor(root, path.join(root, "b.jsonl"), OTHER_ID, main);
+  await emit({ type: "session_before_switch", reason: "new" }, a);
+  const slow = emit({ type: "session_switch", reason: "new", previousSessionFile: parent }, b);
+  await Bun.sleep(50);
+  await emit({ type: "session_switch", reason: "fork", previousSessionFile: parent }, b);
+  await slow;
+  const fired = records(log).map(entry => [entry.hook_event_name, entry.source ?? entry.reason, entry.cwd]);
+  // The stale `new` switch never runs its `clear` SessionStart over the fork's context.
+  expect(fired).toEqual([["SessionStart", "fork", root], ["SessionEnd", "clear", outgoing]]);
+  const [held] = await emit({ type: "context", messages: [] }, b) as [{ messages: Array<{ content: [{ text: string }] }> }];
+  expect(held.messages[0].content[0].text).toContain("fork");
+  // Editing the request copy leaves the held context untouched.
+  held.messages[0].content[0].text = "mutated";
+  const [again] = await emit({ type: "context", messages: [] }, b) as [{ messages: Array<{ content: [{ text: string }] }> }];
+  expect(again.messages[0].content[0].text).toContain("fork");
+});
