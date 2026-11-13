@@ -270,6 +270,8 @@ test("session transitions fire Claude's SessionStart sources and SessionEnd reas
   await switchTo("fork", resumed, other);
   await emit({ type: "session_branch", reason: "branch", previousSessionFile: parent }, resumed);
   await emit({ type: "session_tree", newLeafId: null, oldLeafId: null }, resumed);
+  // Each hook names its own session's transcript; caveman's SessionEnd stats need it.
+  expect(records(log).slice(0, 3).map(entry => entry.transcript_path)).toEqual([parent, parent, path.join(root, "other.jsonl")]);
   expect(fired()).toEqual([
     ["SessionStart", "resume", PARENT_ID],
     ["SessionEnd", "clear", PARENT_ID], ["SessionStart", "clear", OTHER_ID],

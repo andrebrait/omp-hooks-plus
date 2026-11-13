@@ -217,13 +217,13 @@ export function createHookContext(
       const delivery = shared.captureContext();
       const settings = await shared.settingsFor(ctx);
       if (!delivery.isActive()) return;
-      const { sessionId, agentId, agentType } = shared.identityFor(ctx);
+      const identity = shared.identityFor(ctx);
       if (matcher === "compact") {
         // Compaction legitimately recurs within a session, so it is never deduplicated. The
         // per-turn content guard resets too, so an async hook can deliver the same text again.
         shared.resetInjectedContext();
       } else {
-        const dedupeKey = `${matcher}:${sessionId}`;
+        const dedupeKey = `${matcher}:${identity.sessionId}`;
         if (shared.firedSessionStartKeys.has(dedupeKey)) {
           return;
         }
@@ -234,9 +234,7 @@ export function createHookContext(
         "SessionStart",
         matcher,
         {
-          sessionId,
-          agentId,
-          agentType,
+          ...identity,
           cwd: ctx.cwd,
           hookEventName: "SessionStart",
           source: matcher,
