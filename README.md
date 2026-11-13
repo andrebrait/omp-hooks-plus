@@ -95,6 +95,19 @@ Matching handlers are deduplicated by command, arguments, and environment and no
 
 `session_id` is OMP's session id, the UUID in the session header, as in Claude Code; `transcript_path` is the session file. A hook that keys per-session state on `session_id` (such as Caveman's per-session mode, which only accepts ids made of letters, digits, `_` and `-`) therefore works per session. A session with no id reports `ephemeral`. **Breaking fix:** earlier releases sent the session file path as `session_id`, so any hook state keyed on that old value is re-keyed and starts fresh.
 
+Session hooks follow OMP's session events:
+
+| OMP event | Claude hooks |
+|---|---|
+| `session_start` | `SessionStart` `startup`, or `resume` when the session already holds an assistant reply (`--resume`, `--continue`) |
+| `session_switch` `new` (`/new`) | `SessionEnd` `clear` for the previous session, then `SessionStart` `clear` |
+| `session_switch` `resume` | `SessionEnd` `resume` for the previous session, then `SessionStart` `resume` |
+| `session_switch` `fork`, `session_branch` | `SessionStart` `fork` |
+| `session_compact` | `SessionStart` `compact` |
+| `session_shutdown` | `SessionEnd` `other` |
+
+`SessionStart` and `SubagentStart` context is session context: the bridge holds it and adds it, as one hidden user message after any leading compaction or branch summary, to every provider request. It is never written to the transcript, so it survives compaction, branching and tree navigation without re-running the hook, and its bytes stay identical between requests for prompt caching. A later `SessionStart` replaces it; `compact` replaces only the context of the hooks that returned some. Context from asynchronous hooks and from every other event is delivered once, as a hidden message for the next turn.
+
 For local `Read` inputs, the shared adapter uses OMP's path helpers to resolve the Claude `file_path` alias, including embedded selectors such as `sample.ts:1-2`. Existing literal colon-containing filenames take precedence. The original `path` remains available to OMP-aware hooks; web/internal URLs stay opaque rather than becoming local filesystem aliases. `Edit` and `Write` paths are not interpreted as read selectors.
 
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts and cancelled passes terminate the complete process group on macOS and Linux.

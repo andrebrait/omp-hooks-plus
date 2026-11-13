@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ContextEvent, ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { extractResponseFromContent } from "./helpers";
 import { triggerSessionHooks } from "./hooks/session-hooks";
 import { DEFAULT_SOURCE } from "./hooks/shared";
@@ -24,6 +24,11 @@ export function hookReminders(contexts: HookContextEntry[], details: HookContext
   return contexts.map(({ source, text }) => hookReminder(text, { ...details, source })).join("\n\n");
 }
 
+/** Marks the session-context message so the `context` handler finds its own copy by property, never by text. */
+export const SESSION_CONTEXT = "ompHooksPlusSessionContext";
+export type SessionContextMessage = ContextEvent["messages"][number] & { [SESSION_CONTEXT]: true };
+type SessionContextEvent = "SessionStart" | "SubagentStart";
+
 export type HookModuleContext = {
   pi: ExtensionAPI;
   firedSessionStartKeys: Set<string>;
@@ -31,6 +36,10 @@ export type HookModuleContext = {
   claimInjectedContext: (content: string) => boolean;
   resetInjectedContext: () => void;
   resetSession: () => void;
+  /** SessionStart/SubagentStart context, added to the head of every provider request; never persisted. */
+  sessionContextMessage: () => SessionContextMessage | undefined;
+  /** `replace` drops every held entry first; otherwise only the sources in `entries` are replaced. */
+  setSessionContext: (entries: HookContextEntry[] | undefined, hookEventName: SessionContextEvent, replace: boolean) => void;
   dispose: () => void;
   captureContext: () => {
     isActive: () => boolean;
@@ -76,6 +85,8 @@ export function createHookContext(
   const injectedThisTurn = new Set<string>();
   let disposed = false;
   let sessionVersion = 0;
+  const sessionContext = new Map<string, { text: string; hookEventName: SessionContextEvent }>();
+  let sessionMessage: SessionContextMessage | undefined;
   const shared: HookModuleContext = {
     pi,
     firedSessionStartKeys: new Set<string>(),
@@ -103,6 +114,17 @@ export function createHookContext(
     dispose: () => {
       disposed = true;
       shared.resetSession();
+      shared.setSessionContext(undefined, "SessionStart", true);
+    },
+    sessionContextMessage: () => sessionMessage,
+    setSessionContext: (entries, hookEventName, replace) => {
+      if (replace) sessionContext.clear();
+      for (const { source, text } of entries ?? []) sessionContext.set(source, { text, hookEventName });
+      const text = [...sessionContext].map(([source, entry]) => hookReminder(entry.text, { hookEventName: entry.hookEventName, source })).join("\n\n");
+      // Rebuilt only when the held context changes, so every request carries identical bytes.
+      sessionMessage = text
+        ? { role: "user", content: [{ type: "text", text }], timestamp: Date.now(), [SESSION_CONTEXT]: true }
+        : undefined;
     },
     captureContext: () => {
       const version = sessionVersion;
@@ -197,11 +219,8 @@ export function createHookContext(
       if (!delivery.isActive()) return;
       const { sessionId, agentId, agentType } = shared.identityFor(ctx);
       if (matcher === "compact") {
-        // Compaction legitimately recurs within a session — unlike startup/resume,
-        // it must reinject its bootstrap context every time, not just once. Reset
-        // the per-turn content-dedup guard too: without it, injectHiddenContext's
-        // claimInjectedContext would silently drop a second compaction's
-        // byte-identical content as a "duplicate" of the first.
+        // Compaction legitimately recurs within a session, so it is never deduplicated. The
+        // per-turn content guard resets too, so an async hook can deliver the same text again.
         shared.resetInjectedContext();
       } else {
         const dedupeKey = `${matcher}:${sessionId}`;
@@ -227,9 +246,9 @@ export function createHookContext(
         (msg, type) => shared.notify(ctx, msg, type),
       );
 
-      for (const { source, text } of result.contexts ?? []) {
-        delivery.injectHiddenContext(text, { hookEventName: "SessionStart", matcher, source });
-      }
+      if (!delivery.isActive()) return;
+      // Compaction refreshes the sources that answered and keeps the others' startup context.
+      shared.setSessionContext(result.contexts, "SessionStart", matcher !== "compact");
     },
   };
 

@@ -234,6 +234,7 @@ test("SessionStart runs in a subagent only for compaction, with the parent's ide
     const emit = adapter(settings);
     await emit({ type: "session_start" }, ctx);
     await emit({ type: "session_before_switch", reason: "resume" }, ctx);
+    await emit({ type: "session_switch", reason: "resume", previousSessionFile: undefined }, ctx);
     await emit(compacted, ctx);
   };
 
@@ -246,6 +247,51 @@ test("SessionStart runs in a subagent only for compaction, with the parent's ide
   await lifecycle(mainCtx(root, parent));
   expect(records(log).map(entry => entry.source)).toEqual(["startup", "resume", "compact"]);
   for (const entry of records(log)) expect(entry).not.toHaveProperty("agent_id");
+});
+
+test("session transitions fire Claude's SessionStart sources and SessionEnd reasons for the right session", async () => {
+  const { root, parent, log } = sessions();
+  const settings: SettingsFile = { hooks: { SessionStart: [{ hooks: [record(log)] }], SessionEnd: [{ hooks: [record(log)] }] } };
+  const emit = adapter(settings);
+  const resumed = { ...mainCtx(root, parent), sessionManager: {
+    getSessionFile: () => parent, getSessionId: () => PARENT_ID,
+    getEntries: () => [{ type: "message", message: { role: "assistant" } }],
+  } };
+  const other = ctxFor(root, path.join(root, "other.jsonl"), OTHER_ID, main);
+  const fired = () => records(log).splice(0).map(entry => [entry.hook_event_name, entry.source ?? entry.reason, entry.session_id]);
+  const switchTo = async (reason: string, from: unknown, to: unknown) => {
+    await emit({ type: "session_before_switch", reason }, from);
+    await emit({ type: "session_switch", reason, previousSessionFile: parent }, to);
+  };
+
+  await emit({ type: "session_start" }, resumed);
+  await switchTo("new", resumed, other);
+  await switchTo("resume", other, resumed);
+  await switchTo("fork", resumed, other);
+  await emit({ type: "session_branch", reason: "branch", previousSessionFile: parent }, resumed);
+  await emit({ type: "session_tree", newLeafId: null, oldLeafId: null }, resumed);
+  expect(fired()).toEqual([
+    ["SessionStart", "resume", PARENT_ID],
+    ["SessionEnd", "clear", PARENT_ID], ["SessionStart", "clear", OTHER_ID],
+    ["SessionEnd", "resume", OTHER_ID], ["SessionStart", "resume", PARENT_ID],
+    ["SessionStart", "fork", OTHER_ID],
+    ["SessionStart", "fork", PARENT_ID],
+  ]);
+});
+
+test("held session context leads every request after summaries and replaces its earlier copy", async () => {
+  const { root, parent } = sessions();
+  const emit = adapter({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "printf BOOT" }] }] } });
+  const ctx = mainCtx(root, parent);
+  await emit({ type: "session_start" }, ctx);
+  const summary = { role: "compactionSummary", summary: "s" };
+  const user = { role: "user", content: "hi" };
+  const [first] = await emit({ type: "context", messages: [summary, user] }, ctx) as [{ messages: Array<Record<string, unknown>> }];
+  expect(first.messages.map(message => message.role)).toEqual(["compactionSummary", "user", "user"]);
+  expect(JSON.stringify(first.messages[1])).toContain("BOOT");
+  // A copy carried into the next request is replaced, not duplicated, and the bytes are identical.
+  const [second] = await emit({ type: "context", messages: first.messages }, ctx) as [{ messages: unknown[] }];
+  expect(second.messages).toEqual(first.messages);
 });
 
 test("a top-level session reports its session id, never its file path, and its file as the transcript", async () => {

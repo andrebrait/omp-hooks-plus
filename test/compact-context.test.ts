@@ -1,30 +1,32 @@
-import { afterEach, expect, jest, test } from "bun:test";
+import { expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { createHookContext } from "../src/hook-context";
 
-afterEach(() => {
-  jest.useRealTimers();
-});
-test("compaction restores bootstrap context to the model without a new user prompt", async () => {
-  const messages: string[] = [];
-  jest.useFakeTimers();
-  const shared = createHookContext({
-    sendMessage: (message: { content: string }) => messages.push(message.content),
-  } as unknown as ExtensionAPI, async () => ({
-    hooks: { SessionStart: [{ matcher: "compact", hooks: [{
-      type: "command", command: "printf 'Restore the workflow instructions.'",
-    }] }] },
+const reminder = (text: string, source = "omp-hooks-plus") =>
+  `<system-reminder source="${source}" event="SessionStart">\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
+
+test("compaction refreshes the held bootstrap context of the hooks that answered and keeps the others", async () => {
+  let compactText = "Restore the workflow instructions.";
+  const shared = createHookContext({} as ExtensionAPI, async () => ({
+    hooks: { SessionStart: [
+      { matcher: "startup", hooks: [{ type: "command", command: "printf 'Startup only.'", source: "plugin-a" }] },
+      { matcher: "compact", hooks: [{ type: "command", command: `printf '${compactText}'`, source: "plugin-b" }] },
+    ] },
   }));
   const ctx = {
     cwd: process.cwd(),
     sessionManager: { getSessionFile: () => "model-context-session", getSessionId: () => "model-context-session" },
     ui: { notify: () => {} },
   } as unknown as ExtensionContext;
+  const held = () => (shared.sessionContextMessage()?.content as [{ text: string }] | undefined)?.[0].text;
 
+  await shared.triggerSessionStartHook("startup", ctx);
+  expect(held()).toBe(reminder("Startup only.", "plugin-a"));
   for (let compaction = 0; compaction < 2; compaction++) {
     await shared.triggerSessionStartHook("compact", ctx);
-    jest.advanceTimersByTime(80);
-    expect(messages.splice(0)).toEqual(["<system-reminder source=\"omp-hooks-plus\" event=\"SessionStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nRestore the workflow instructions.\n</system-reminder>"]);
+    expect(held()).toBe(`${reminder("Startup only.", "plugin-a")}\n\n${reminder(compactText, "plugin-b")}`);
+    compactText = "Changed instructions.";
   }
   shared.dispose();
+  expect(shared.sessionContextMessage()).toBeUndefined();
 });

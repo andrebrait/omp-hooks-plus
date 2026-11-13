@@ -435,15 +435,7 @@ export async function triggerSimpleHooks(
   matcherAliases: string[] = [],
 ): Promise<HookRunResult> {
   const groups = getHookGroups(settings, eventName);
-  const collected = collectMatchingHooks(
-    groups,
-    context,
-    matcherValue,
-    matcherAliases,
-    eventName === "SessionEnd"
-      ? (group) => group.matcher ?? "other"
-      : undefined,
-  );
+  const collected = collectMatchingHooks(groups, context, matcherValue, matcherAliases);
 
   const results = await runHooksParallel(collected, context, eventName);
   const aggregatedResult: HookRunResult = {};
