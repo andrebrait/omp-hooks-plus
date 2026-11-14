@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { toClaudeToolName } from "../claude";
-import { hookReminders, type HookModuleContext } from "../hook-context";
+import type { HookModuleContext } from "../hook-context";
 import { subagentIdentity } from "../subagent";
 import type { SettingsFile } from "../types";
 import { triggerSimpleHooks } from "./shared";
@@ -70,10 +70,6 @@ export function registerApproximatedHooks(pi: ExtensionAPI, shared: HookModuleCo
       asyncContextSink: delivery.injectHiddenContext,
     }, agentType === undefined ? untypedSubagentStart(settings) : settings, (msg, type) => shared.notify(ctx, msg, type),
     agentType ? [agentType[0].toUpperCase() + agentType.slice(1)] : []);
-    if (!delivery.isActive() || !result.contexts) return;
-    const details = { hookEventName: "SubagentStart" } as const;
-    return {
-      message: { customType: "omp-hooks-plus", content: hookReminders(result.contexts, details), display: false, details },
-    };
+    if (delivery.isActive()) shared.setSessionContext(result.contexts, "SubagentStart", true);
   });
 }

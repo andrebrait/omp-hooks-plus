@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, expect, jest, test } from "bun:test";
 import type {
   ExtensionAPI,
@@ -250,23 +253,22 @@ test("an aborted Stop pass drops the hook verdict instead of continuing", async 
   expect(race.messages).toEqual([]);
 });
 
-test("each ephemeral session receives startup context once after a session reset", async () => {
-  jest.useFakeTimers();
-  const messages: string[] = [];
-  const shared = createHookContext({
-    sendMessage: (message: { content: string }) => messages.push(message.content),
-  } as unknown as ExtensionAPI, async () => ({
-    hooks: { SessionStart: [{ hooks: [{ type: "command", command: "printf 'bootstrap'" }] }] },
+test("each ephemeral session runs its startup hook once after a session reset", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "omp-hooks-reset-"));
+  const counter = path.join(dir, "runs");
+  const shared = createHookContext({} as ExtensionAPI, async () => ({
+    hooks: { SessionStart: [{ hooks: [{ type: "command", command: `n=$(($(cat '${counter}' 2>/dev/null || echo 0) + 1)); echo $n > '${counter}'; printf "bootstrap $n"` }] }] },
   }));
   contexts.push(shared);
   const ctx = { cwd: process.cwd(), sessionManager: { getSessionFile: () => undefined, getSessionId: () => "" }, ui: { notify: () => {} } } as unknown as ExtensionContext;
+  const held = () => (shared.sessionContextMessage()?.content as [{ text: string }])[0].text;
   await shared.triggerSessionStartHook("startup", ctx);
-  jest.advanceTimersByTime(70);
   await shared.triggerSessionStartHook("startup", ctx);
+  expect(held()).toBe(r("bootstrap 1"));
   shared.resetSession();
   await shared.triggerSessionStartHook("startup", ctx);
-  jest.advanceTimersByTime(70);
-  expect(messages).toEqual([r("bootstrap"), r("bootstrap")]);
+  expect(held()).toBe(r("bootstrap 2"));
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test("the same text from two sources reaches the model once per source", () => {

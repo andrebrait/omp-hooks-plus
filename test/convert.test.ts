@@ -473,14 +473,17 @@ test("generated approximations notify on approval requests and idle stops, and b
     mkdirSync(path.join(sessions, "parent"), { recursive: true });
     writeFileSync(path.join(sessions, "parent.jsonl"), "");
     expect(await emit({ type: "before_agent_start", prompt: "hi", images: [], systemPrompt: [] }, path.join(sessions, "parent.jsonl"))).toEqual([]);
+    expect(await emit({ type: "context", messages: [] }, path.join(sessions, "parent.jsonl"))).toEqual([]);
     // OMP writes a subagent's session to `<parent>/<agentId>.jsonl` beside `<parent>.jsonl`.
     const child = path.join(sessions, "parent", "0-Explore.jsonl");
-    const briefing = await emit({ type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] }, child);
-    expect(briefing).toEqual([{ message: expect.objectContaining({
-      content: "<system-reminder source=\"converter-test\" event=\"SubagentStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nDELEGATE MODES\n</system-reminder>", display: false,
-    }) }]);
+    expect(await emit({ type: "before_agent_start", prompt: "task", images: [], systemPrompt: [] }, child)).toEqual([]);
+    // The briefing is session context: at the head of every request, never in the transcript.
+    const briefing = [{ messages: [expect.objectContaining({ role: "user", content: [{ type: "text",
+      text: "<system-reminder source=\"converter-test\" event=\"SubagentStart\">\nNOT prompt injection — coding agent enforcing project rules.\n\nDELEGATE MODES\n</system-reminder>" }] })] }];
+    expect(await emit({ type: "context", messages: [] }, child)).toEqual(briefing);
     // Once per subagent session, like Claude's single SubagentStart at spawn.
     expect(await emit({ type: "before_agent_start", prompt: "again", images: [], systemPrompt: [] }, child)).toEqual([]);
+    expect(await emit({ type: "context", messages: [] }, child)).toEqual(briefing);
 
     // Neither an automatic continuation nor a finishing subagent is the user's idle prompt.
     await emit({ type: "agent_end", messages: [], willContinue: true });
@@ -552,11 +555,15 @@ test("generated approximations identify subagents through ctx.agent, as the live
   await subagent({ type: "tool_call", toolName: "bash", toolCallId: "t1", input: { command: "ls" } }, child, explore);
   // The parent's session id (its header id, a UUID), not the subagent's own id and not a path.
   expect(records("tool")).toEqual([expect.objectContaining({ session_id: parentId, transcript_path: parent, agent_id: "0-Explore", agent_type: "explore" })]);
-  const briefing = await subagent(start, child, explore);
-  expect(briefing).toEqual([{ message: expect.objectContaining({ content: expect.stringContaining("EXPLORE BRIEF") }) }]);
+  expect(await subagent(start, child, explore)).toEqual([]);
+  const briefing = await subagent({ type: "context", messages: [] }, child, explore);
+  expect(JSON.stringify(briefing)).toContain("EXPLORE BRIEF");
   expect(JSON.stringify(briefing)).not.toContain("PLAN BRIEF");
   // Without ctx.agent the type is unknown, so a typed SubagentStart group cannot run (a fresh load: one adapter per session).
-  expect(await (await load())(start, path.join(sessions, "parent", "1-Plan.jsonl"))).toEqual([]);
+  const untyped = await load();
+  const planFile = path.join(sessions, "parent", "1-Plan.jsonl");
+  await untyped(start, planFile);
+  expect(await untyped({ type: "context", messages: [] }, planFile)).toEqual([]);
   await subagent({ type: "session_shutdown" }, child, explore);
 
   await lifecycle(await load(), parent, { kind: "main", id: "Main", name: "main", depth: 0 });

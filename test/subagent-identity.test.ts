@@ -234,6 +234,7 @@ test("SessionStart runs in a subagent only for compaction, with the parent's ide
     const emit = adapter(settings);
     await emit({ type: "session_start" }, ctx);
     await emit({ type: "session_before_switch", reason: "resume" }, ctx);
+    await emit({ type: "session_switch", reason: "resume", previousSessionFile: undefined }, ctx);
     await emit(compacted, ctx);
   };
 
@@ -246,6 +247,53 @@ test("SessionStart runs in a subagent only for compaction, with the parent's ide
   await lifecycle(mainCtx(root, parent));
   expect(records(log).map(entry => entry.source)).toEqual(["startup", "resume", "compact"]);
   for (const entry of records(log)) expect(entry).not.toHaveProperty("agent_id");
+});
+
+test("session transitions fire Claude's SessionStart sources and SessionEnd reasons for the right session", async () => {
+  const { root, parent, log } = sessions();
+  const settings: SettingsFile = { hooks: { SessionStart: [{ hooks: [record(log)] }], SessionEnd: [{ hooks: [record(log)] }] } };
+  const emit = adapter(settings);
+  const resumed = { ...mainCtx(root, parent), sessionManager: {
+    getSessionFile: () => parent, getSessionId: () => PARENT_ID,
+    getEntries: () => [{ type: "message", message: { role: "assistant" } }],
+  } };
+  const other = ctxFor(root, path.join(root, "other.jsonl"), OTHER_ID, main);
+  const fired = () => records(log).splice(0).map(entry => [entry.hook_event_name, entry.source ?? entry.reason, entry.session_id]);
+  const switchTo = async (reason: string, from: unknown, to: unknown) => {
+    await emit({ type: "session_before_switch", reason }, from);
+    await emit({ type: "session_switch", reason, previousSessionFile: parent }, to);
+  };
+
+  await emit({ type: "session_start" }, resumed);
+  await switchTo("new", resumed, other);
+  await switchTo("resume", other, resumed);
+  await switchTo("fork", resumed, other);
+  await emit({ type: "session_branch", reason: "branch", previousSessionFile: parent }, resumed);
+  await emit({ type: "session_tree", newLeafId: null, oldLeafId: null }, resumed);
+  // Each hook names its own session's transcript; caveman's SessionEnd stats need it.
+  expect(records(log).slice(0, 3).map(entry => entry.transcript_path)).toEqual([parent, parent, path.join(root, "other.jsonl")]);
+  expect(fired()).toEqual([
+    ["SessionStart", "resume", PARENT_ID],
+    ["SessionEnd", "clear", PARENT_ID], ["SessionStart", "clear", OTHER_ID],
+    ["SessionEnd", "resume", OTHER_ID], ["SessionStart", "resume", PARENT_ID],
+    ["SessionStart", "fork", OTHER_ID],
+    ["SessionStart", "fork", PARENT_ID],
+  ]);
+});
+
+test("held session context leads every request after summaries with identical bytes", async () => {
+  const { root, parent } = sessions();
+  const emit = adapter({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "printf BOOT" }] }] } });
+  const ctx = mainCtx(root, parent);
+  await emit({ type: "session_start" }, ctx);
+  const summary = { role: "compactionSummary", summary: "s" };
+  const user = { role: "user", content: "hi" };
+  const [first] = await emit({ type: "context", messages: [summary, user] }, ctx) as [{ messages: Array<Record<string, unknown>> }];
+  expect(first.messages.map(message => message.role)).toEqual(["compactionSummary", "user", "user"]);
+  expect(JSON.stringify(first.messages[1])).toContain("BOOT");
+  // The next request carries the same bytes at the same position, so the cached prefix holds.
+  const [second] = await emit({ type: "context", messages: [summary, user, { role: "assistant", content: [] }] }, ctx) as [{ messages: unknown[] }];
+  expect(second.messages.slice(0, 3)).toEqual(first.messages);
 });
 
 test("a top-level session reports its session id, never its file path, and its file as the transcript", async () => {
@@ -449,4 +497,31 @@ test("without ctx.agent only untyped SubagentStart groups run", async () => {
   ] } });
   await emit(agentStart, subCtx(root, child));
   expect(tags(log)).toEqual(["star", "untyped"]);
+});
+
+test("a switch that commits while an earlier SessionEnd runs owns the session, and SessionEnd reports the outgoing cwd", async () => {
+  const { root, parent, log } = sessions();
+  const outgoing = path.join(root, "outgoing");
+  mkdirSync(outgoing);
+  const settings: SettingsFile = { hooks: {
+    SessionEnd: [{ hooks: [{ type: "command", command: `sleep 0.3; printf '%s\\n' "$(cat)" >> "${log}"` }] }],
+    SessionStart: [{ hooks: [{ type: "command", command: `input=$(cat); printf '%s\\n' "$input" >> "${log}"; printf "$(printf '%s' "$input" | sed 's/.*"source":"\\([a-z]*\\)".*/\\1/')"` }] }],
+  } };
+  const emit = adapter(settings);
+  const a = ctxFor(outgoing, parent, PARENT_ID, main);
+  const b = ctxFor(root, path.join(root, "b.jsonl"), OTHER_ID, main);
+  await emit({ type: "session_before_switch", reason: "new" }, a);
+  const slow = emit({ type: "session_switch", reason: "new", previousSessionFile: parent }, b);
+  await Bun.sleep(50);
+  await emit({ type: "session_switch", reason: "fork", previousSessionFile: parent }, b);
+  await slow;
+  const fired = records(log).map(entry => [entry.hook_event_name, entry.source ?? entry.reason, entry.cwd]);
+  // The stale `new` switch never runs its `clear` SessionStart over the fork's context.
+  expect(fired).toEqual([["SessionStart", "fork", root], ["SessionEnd", "clear", outgoing]]);
+  const [held] = await emit({ type: "context", messages: [] }, b) as [{ messages: Array<{ content: [{ text: string }] }> }];
+  expect(held.messages[0].content[0].text).toContain("fork");
+  // Editing the request copy leaves the held context untouched.
+  held.messages[0].content[0].text = "mutated";
+  const [again] = await emit({ type: "context", messages: [] }, b) as [{ messages: Array<{ content: [{ text: string }] }> }];
+  expect(again.messages[0].content[0].text).toContain("fork");
 });

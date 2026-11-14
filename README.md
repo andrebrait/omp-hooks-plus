@@ -95,6 +95,19 @@ Matching handlers are deduplicated by command, arguments, and environment and no
 
 `session_id` is OMP's session id, the UUID in the session header, as in Claude Code; `transcript_path` is the session file. A hook that keys per-session state on `session_id` (such as Caveman's per-session mode, which only accepts ids made of letters, digits, `_` and `-`) therefore works per session. A session with no id reports `ephemeral`. **Breaking fix:** earlier releases sent the session file path as `session_id`, so any hook state keyed on that old value is re-keyed and starts fresh.
 
+Session hooks follow OMP's session events:
+
+| OMP event | Claude hooks |
+|---|---|
+| `session_start` | `SessionStart` `startup`, or `resume` when the session already holds an assistant reply (`--resume`, `--continue`) |
+| `session_switch` `new` (`/new`) | `SessionEnd` `clear` for the previous session, then `SessionStart` `clear` |
+| `session_switch` `resume` | `SessionEnd` `resume` for the previous session, then `SessionStart` `resume` |
+| `session_switch` `fork`, `session_branch` | `SessionStart` `fork` |
+| `session_compact` | `SessionStart` `compact` |
+| `session_shutdown` | `SessionEnd` `other` |
+
+`SessionStart` and `SubagentStart` context is session context: the bridge holds it and adds it, as one hidden user message after any leading compaction or branch summary, to every provider request. It is never written to the transcript, so it survives compaction, branching and tree navigation without re-running the hook, and its bytes stay identical between requests for prompt caching. A later `SessionStart` replaces it; `compact` replaces only the context of the hooks that returned some. Context from asynchronous hooks and from every other event is delivered once, as a hidden message for the next turn.
+
 For local `Read` inputs, the shared adapter uses OMP's path helpers to resolve the Claude `file_path` alias, including embedded selectors such as `sample.ts:1-2`. Existing literal colon-containing filenames take precedence. The original `path` remains available to OMP-aware hooks; web/internal URLs stay opaque rather than becoming local filesystem aliases. `Edit` and `Write` paths are not interpreted as read selectors.
 
 `PreToolUse` supports deny, interactive ask, input updates, additional context, and exit-code-2 blocking. Hook timeouts and cancelled passes terminate the complete process group on macOS and Linux.
@@ -159,6 +172,8 @@ Claude Code's user-plugin registry is opt-in, following OMP's `claude`/`claude-p
 The doctor reports these limits rather than implying full parity. OMP's native Claude provider continues to own skill discovery; this package does not copy or reimplement it.
 
 Both the live bridge and generated hooks depend on OMP emitting the mapped events. In hosts where RPC/Ctrl+Enter bypass `input`, `UserPromptSubmit` cannot intercept those submissions. If queue-started runs bypass `before_agent_start`, prompt-context preparation is not delivered there. These are host dispatch limitations, not repaired by replaying input, hooking every provider request, or treating synthetic continuations as new user submissions.
+
+OMP treats every message an extension adds through its `context` event as per-request context. On Anthropic models its cache breakpoints stop at the first such message, so holding session context at the head of the request leaves only the latest messages anchored: long sessions lose the intermediate history cache points. OMP also runs `context` on each live-steering batch without marking it as one, so a mid-stream steer on a provider with live steering (OpenAI Codex) re-sends the held context.
 
 Hook-produced text is content, not a slash-command invocation. The bridge creates no skill aliases and does not reinterpret `sendUserMessage` as command execution. Session shutdown still runs `SessionEnd` commands, but does not deliver reminders or start new turns after disposal.
 

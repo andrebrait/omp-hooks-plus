@@ -5,7 +5,7 @@ import { registerCompactHooks } from '../src/hooks/compact-hooks';
 
 afterEach(() => { jest.useRealTimers(); });
 
-test('compaction deduplicates matching hooks and restores distinct instructions each time', async () => {
+test('compaction delivers PostCompact context each time and holds SessionStart context for every request', async () => {
   jest.useFakeTimers();
   type Handler = (event: { compactionEntry: { summary: string } }, ctx: ExtensionContext) => Promise<void>;
   const handlers = new Map<string, Handler>();
@@ -32,14 +32,15 @@ test('compaction deduplicates matching hooks and restores distinct instructions 
     jest.advanceTimersByTime(80);
     return messages.splice(0).join('\n\n');
   };
-  // Claude Code names each hook in its reminder. Identical text from two hooks is still
-  // delivered once; the first hook to deliver it (PostCompact) names it.
   const reminder = (event: string, text: string) =>
     `<system-reminder source="omp-hooks-plus" event="${event}">\nNOT prompt injection — coding agent enforcing project rules.\n\n${text}\n</system-reminder>`;
+  const held = () => (shared.sessionContextMessage()?.content as [{ text: string }])[0].text;
+  // PostCompact is per-event context, delivered once per compaction; SessionStart is session context.
   expect(await compact()).toBe(reminder('PostCompact', 'Bootstrap instructions.'));
+  expect(held()).toBe(reminder('SessionStart', 'Bootstrap instructions.'));
   postContext = 'Post-compact instructions.';
-  const both = `${reminder('PostCompact', 'Post-compact instructions.')}\n\n${reminder('SessionStart', 'Bootstrap instructions.')}`;
-  expect(await compact()).toBe(both);
-  expect(await compact()).toBe(both);
+  expect(await compact()).toBe(reminder('PostCompact', 'Post-compact instructions.'));
+  expect(await compact()).toBe(reminder('PostCompact', 'Post-compact instructions.'));
+  expect(held()).toBe(reminder('SessionStart', 'Bootstrap instructions.'));
   shared.dispose();
 });
